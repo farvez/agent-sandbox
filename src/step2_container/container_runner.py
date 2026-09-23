@@ -60,13 +60,15 @@ class IsolatedContainerRunner:
                 image=self.image,
                 command=["/bin/bash", "-c", command],
                 network_mode="none",              # No external egress or ingress
-                mem_limit=self.mem_limit,         # Hard memory ceiling
+                mem_limit=self.mem_limit,         # Hard RAM ceiling (256m)
+                memswap_limit=self.mem_limit,     # Hard RAM + Swap ceiling (no swap headroom)
                 nano_cpus=self.nano_cpus,         # CFS CPU quota
                 pids_limit=self.pids_limit,       # Prevent fork bombs
                 volumes=mounts,
                 working_dir="/workspace",
                 environment=environment or {},
                 detach=True,
+            
             )
 
             container.start()
@@ -125,5 +127,8 @@ if __name__ == "__main__":
     print(f"Stderr (Expected Network Failure):\n{res2.stderr.strip()[:200]}...")
 
     print("\n--- Test 3: CGroup Memory Kill Check ---")
-    res3 = runner.run_in_sandbox("python3 -c \"x = 'a' * (300 * 1024 * 1024)\"")
+    # Continuously appends 10MB chunks until the 256MB cap is breached
+    res3 = runner.run_in_sandbox(
+        "python3 -c \"b = []; [b.append(' ' * 10**7) for _ in iter(int, 1)]\""
+    )
     print(f"Exit Code: {res3.exit_code} | OOM Killed: {res3.oom_killed}")
