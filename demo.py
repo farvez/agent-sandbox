@@ -6,6 +6,8 @@ from rich.syntax import Syntax
 
 from src.step5_agent.sandbox import SandboxedWorkspace
 from src.step5_agent.agent import AutonomousCodingAgent
+from dotenv import load_dotenv
+load_dotenv()
 
 console = Console()
 
