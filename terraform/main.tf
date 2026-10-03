@@ -1,5 +1,11 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
+
+  # State lives in an encrypted, versioned S3 bucket with native locking.
+  # Settings come from backend.hcl (git-ignored; created from terraform/bootstrap):
+  #   terraform init -backend-config=backend.hcl
+  backend "s3" {}
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"

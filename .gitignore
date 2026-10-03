@@ -20,3 +20,4 @@ tfplan
 dist/
 build/
 *.egg-info/
+terraform/backend.hcl

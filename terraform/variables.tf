@@ -79,3 +79,15 @@ variable "tenant_limits" {
   default     = {}
   # Example: { "*" = { max_sessions = 10 }, acme = { max_sessions = 50, requests_per_minute = 600 } }
 }
+
+variable "alert_email" {
+  description = "Email for alarms (API down, disk filling, unhealthy server, high CPU) and budget warnings. Empty = alarms still exist but notify no one. AWS sends a confirmation link first."
+  type        = string
+  default     = ""
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly AWS cost budget; an email goes out at 80% of actual spend and when the forecast exceeds 100%."
+  type        = number
+  default     = 30
+}

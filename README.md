@@ -341,13 +341,43 @@ together as an SSM SecureString), and an instance role. At boot the host install
 and Caddy; builds `sandbox-base:latest` from this repo's Dockerfile; and runs the API
 as a non-root `sandbox` user behind Caddy on port 443, with `SANDBOX_REQUIRE_GVISOR=1`.
 
+**First time only — state bucket.** Terraform state contains the API keys, so it lives in an
+encrypted, versioned S3 bucket with native locking, not on a laptop:
+
+```bash
+cd terraform/bootstrap
+terraform init && terraform apply                      # creates agent-sandbox-tfstate-<account-id>
+terraform output -raw backend_config > ../backend.hcl  # git-ignored
+```
+
+**Deploy:**
+
 ```bash
 cd terraform
-terraform init
+terraform init -backend-config=backend.hcl
 terraform apply -var 'allowed_ingress_cidrs=["<your-ip>/32"]' -var 'tenants=["default","acme"]' \
-  -var 'egress_policy={acme=["pypi"]}'
+  -var 'egress_policy={acme=["pypi"]}' -var 'alert_email=you@example.com'
 $(terraform output -raw fetch_api_keys_command)   # prints tenant:key pairs
 ```
+
+On a new machine, `terraform init -backend-config=backend.hcl` is all it takes to pick up the
+existing state. Old state versions are kept for 90 days in the bucket.
+
+**Monitoring.** Every minute the host checks `/healthz` through Caddy and TLS and reports
+`ApiHealthy`, `ActiveSessions`, `RootDiskUsedPercent` and `WorkspacesDiskUsedPercent` to
+CloudWatch (namespace `AgentSandbox`, dimension `Service=agent-sandbox`), and deletes egress
+logs older than 30 days. Alarms email `alert_email` (confirm AWS's subscription email first):
+
+| Alarm | Fires when |
+|-------|-----------|
+| `agent-sandbox-api-down` | health check failing or no data for 3 min (also during the ~8 min of a redeploy) |
+| `agent-sandbox-root-disk-80pct` | main disk over 80% |
+| `agent-sandbox-workspaces-disk-80pct` | workspace filesystem over 80% |
+| `agent-sandbox-status-check-failed` | AWS instance status check failing |
+| `agent-sandbox-cpu-high` | CPU over 90% for 15 min |
+
+A monthly cost budget (`monthly_budget_usd`, default $30) emails at 80% of actual spend and
+when the month's forecast exceeds 100%.
 
 - **Settings file:** put your variables in `terraform/terraform.tfvars` (git-ignored) so every
   `plan` / `apply` / `destroy` uses the same values — forgetting `domain_name` on one apply

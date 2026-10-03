@@ -196,4 +196,71 @@ fi
 
 systemctl restart caddy
 
+# 8. Self-monitoring: every minute, check /healthz through Caddy and TLS, report
+#    health and disk usage to CloudWatch (alarms in monitoring.tf), and prune
+#    egress logs older than 30 days.
+cat > /etc/agent-sandbox/monitor.env <<EOF
+AWS_REGION=$AWS_REGION
+DOMAIN=$DOMAIN
+EOF
+
+cat > "$APP_DIR/monitor.sh" <<'MON'
+#!/bin/bash
+set -u
+. /etc/agent-sandbox/monitor.env
+
+put() {  # metric value unit
+  aws cloudwatch put-metric-data --region "$AWS_REGION" --namespace AgentSandbox \
+    --dimensions Service=agent-sandbox --metric-name "$1" --value "$2" --unit "$3"
+}
+
+# Through Caddy, so a broken proxy or certificate also counts as down.
+if [ -n "$DOMAIN" ]; then
+  check=(curl -fsS --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/healthz")
+else
+  check=(curl -fsSk --max-time 10 "https://127.0.0.1/healthz")
+fi
+
+healthy=0
+sessions=0
+if body=$("$${check[@]}" 2>/dev/null); then
+  healthy=1
+  sessions=$(printf '%s' "$body" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("active_sessions", 0))' 2>/dev/null || echo 0)
+fi
+
+put ApiHealthy "$healthy" Count
+put ActiveSessions "$sessions" Count
+put RootDiskUsedPercent "$(df --output=pcent / | tail -1 | tr -dc '0-9')" Percent
+put WorkspacesDiskUsedPercent "$(df --output=pcent /var/lib/agent-sandbox/workspaces | tail -1 | tr -dc '0-9')" Percent
+
+find /var/lib/agent-sandbox/egress -maxdepth 1 -name '*.jsonl' -mtime +30 -delete
+MON
+chmod 0755 "$APP_DIR/monitor.sh"
+
+cat > /etc/systemd/system/agent-sandbox-monitor.service <<EOF
+[Unit]
+Description=Agent Sandbox health and disk metrics
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$APP_DIR/monitor.sh
+EOF
+
+cat > /etc/systemd/system/agent-sandbox-monitor.timer <<'EOF'
+[Unit]
+Description=Run agent-sandbox-monitor every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now agent-sandbox-monitor.timer
+
 echo "=== Provisioning Complete. Service Ready ==="
