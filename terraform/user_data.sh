@@ -14,6 +14,8 @@ echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
 AWS_REGION="${aws_region}"
 APP_BUNDLE="${app_bundle_s3}"
 API_KEY_PARAM="${api_key_param}"
+ADMIN_KEY_PARAM="${admin_key_param}"
+KEYS_TABLE="${keys_table}"
 DOMAIN="${domain_name}"
 SESSION_TTL="${session_ttl_secs}"
 EGRESS_LOG_DIR=/var/lib/agent-sandbox/egress
@@ -127,6 +129,8 @@ chmod 0644 /etc/agent-sandbox/tenant-limits.json
 cat > "$APP_DIR/start.sh" <<EOF
 #!/bin/bash
 set -euo pipefail
+export SANDBOX_ADMIN_KEY="\$(aws ssm get-parameter --region $AWS_REGION --name $ADMIN_KEY_PARAM \
+  --with-decryption --query Parameter.Value --output text)"
 export SANDBOX_API_KEYS="\$(aws ssm get-parameter --region $AWS_REGION --name $API_KEY_PARAM \
   --with-decryption --query Parameter.Value --output text)"
 exec $APP_DIR/.venv/bin/python3 -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000
@@ -152,6 +156,8 @@ Environment=SANDBOX_WORKSPACE_POOL=$WS_ROOT
 Environment=SANDBOX_WORKSPACE_QUOTA_MB=$WS_QUOTA_MB
 Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
 Environment=SANDBOX_TENANT_LIMITS_FILE=/etc/agent-sandbox/tenant-limits.json
+Environment=SANDBOX_KEYSTORE=dynamodb:$KEYS_TABLE
+Environment=AWS_REGION=$AWS_REGION
 Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
 ExecStart=$APP_DIR/start.sh
 Restart=always

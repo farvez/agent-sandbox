@@ -333,3 +333,72 @@ def test_text_only_output_is_split_into_fields(text, expected):
     for key, value in expected.items():
         assert getattr(result, key) == value, key
     assert result.output == text
+
+
+# ---------------------------------------------------------------- key management (Keys + CLI)
+
+ADMIN_KEY = "b" * 40
+
+
+@pytest.fixture
+def keystore(api_url, monkeypatch, tmp_path):
+    from src.api.keystore import KeyStore, SqliteBackend
+
+    monkeypatch.setattr(server, "KEYSTORE", KeyStore(SqliteBackend(str(tmp_path / "keys.db"))))
+    monkeypatch.setattr(server, "ADMIN_KEY", ADMIN_KEY)
+    return api_url
+
+
+def test_admin_issues_tenant_rotates_old_key_dies(keystore):
+    from airlock_sandbox import AuthenticationError
+    from airlock_sandbox.keys import Keys
+
+    admin = Keys(api_key=ADMIN_KEY, base_url=keystore, admin=True)
+    first = admin.create(tenant="newco", name="onboarding")
+    assert first["api_key"].startswith("asb_")
+
+    with Sandbox(api_key=first["api_key"], base_url=keystore) as s:     # the new key runs sandboxes
+        assert s.tenant_id == "newco" and s.run("ls").ok
+
+    mine = Keys(api_key=first["api_key"], base_url=keystore)
+    second = mine.create(name="rotated")
+    Keys(api_key=second["api_key"], base_url=keystore).revoke(first["key_id"])
+    assert {k["key_id"]: k["active"] for k in Keys(api_key=second["api_key"], base_url=keystore).list()} == {
+        first["key_id"]: False, second["key_id"]: True}
+    with pytest.raises(AuthenticationError):
+        Sandbox(api_key=first["api_key"], base_url=keystore).start()
+    assert [k["tenant_id"] for k in admin.list(tenant="newco")] == ["newco", "newco"]
+
+
+def test_keys_errors_are_typed(keystore):
+    from airlock_sandbox import AuthenticationError, PermissionDeniedError, SandboxError
+    from airlock_sandbox.keys import Keys
+
+    issued = Keys(api_key=ADMIN_KEY, base_url=keystore, admin=True).create(tenant="acme")
+    with pytest.raises(SandboxError) as last:                       # 409: can't revoke the last key
+        Keys(api_key=issued["api_key"], base_url=keystore).revoke(issued["key_id"])
+    assert last.value.status == 409
+    with pytest.raises(AuthenticationError):                        # a tenant key isn't an admin key
+        Keys(api_key=issued["api_key"], base_url=keystore, admin=True).list()
+    with pytest.raises(SandboxError, match="tenant"):
+        Keys(api_key=ADMIN_KEY, base_url=keystore, admin=True).create(name="x")
+
+
+def test_keys_cli(keystore, monkeypatch, capsys):
+    from airlock_sandbox.keys import main
+
+    monkeypatch.setenv("SANDBOX_API_URL", keystore)
+    monkeypatch.setenv("SANDBOX_ADMIN_KEY", ADMIN_KEY)
+    main(["--admin", "create", "--tenant", "cli-co", "--name", "laptop"])
+    out = capsys.readouterr().out
+    assert "shown only once" in out
+    api_key = next(line.strip() for line in out.splitlines() if line.strip().startswith("asb_"))
+
+    monkeypatch.setenv("SANDBOX_API_KEY", api_key)
+    main(["list"])
+    listing = capsys.readouterr().out
+    assert "cli-co" in listing and "laptop" in listing and "active" in listing and api_key not in listing
+
+    with pytest.raises(SystemExit):                                  # last key: refused, clean error
+        main(["revoke", listing.split("\n")[1].split()[0]])
+    assert "last active key" in capsys.readouterr().err

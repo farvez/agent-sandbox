@@ -248,6 +248,34 @@ with Sandbox(egress=["pypi"]) as sbx:
     print(sbx.egress_log())
 ```
 
+### Self-service API keys
+
+Keys can be issued and revoked at runtime — no redeploy. They look like
+`asb_<key_id>_<secret>`, are shown **once** when created, and only their SHA-256 is stored
+(DynamoDB on the server, `SANDBOX_KEYSTORE=dynamodb:<table>`; SQLite for local development,
+`sqlite:<path>`). Revocation takes effect immediately. Static keys from configuration
+(`SANDBOX_API_KEYS`) keep working alongside them.
+
+| Who | Can | With |
+|-----|-----|------|
+| **Admin** (`SANDBOX_ADMIN_KEY`) | issue a key for any tenant, list all keys, revoke any key | `airlock-sandbox-keys --admin …` or `/v1/admin/keys` |
+| **Tenant** (its own key) | create more keys, list and revoke its own — i.e. rotate | `airlock-sandbox-keys …` or `/v1/keys` |
+
+```bash
+# admin: onboard a developer (prints the key once)
+airlock-sandbox-keys --admin create --tenant acme --name "acme onboarding"
+airlock-sandbox-keys --admin list --tenant acme
+airlock-sandbox-keys --admin revoke <key_id>
+
+# developer: rotate their own key
+airlock-sandbox-keys create --name laptop-2026     # with the old key in SANDBOX_API_KEY
+airlock-sandbox-keys revoke <old_key_id>           # with the new key
+```
+
+Guards: at most 10 active keys per tenant; a tenant can't revoke its last active key (an
+admin can); the admin key manages keys only and can't run sandboxes. A new tenant comes into
+existence with its first key and gets the `"*"` limits and no egress until its policy is set.
+
 ### Per-tenant limits
 
 | Limit | Default | When exceeded |
@@ -281,6 +309,11 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
 | GET | `/v1/egress/policy` | — | `{tenant_id, allowed}` — hosts this tenant may request |
+| GET | `/v1/keys` | — | this tenant's keys (no secrets) |
+| POST | `/v1/keys` | `{name?}` | `201` new key incl. `api_key` (shown once) · `409` 10 active keys |
+| DELETE | `/v1/keys/{key_id}` | — | revoked key · `409` last active key · `404` not this tenant's |
+| GET/POST | `/v1/admin/keys` | `?tenant=` / `{tenant, name?}` | admin key only: list all / issue for any tenant |
+| DELETE | `/v1/admin/keys/{key_id}` | — | admin key only: revoke any key |
 | GET | `/v1/usage` | — | `{tenant_id, limits, sessions_open, commands_running, requests_available}` |
 
 `exec` output is plain text with `[STDOUT]:`, `[STDERR]:`, `[WARNING]:` (OOM kill or over disk quota),
@@ -292,6 +325,8 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | `SANDBOX_API_KEY` | — | Single key for a tenant named `default` (at least one of the two is required) |
 | `SANDBOX_SESSION_TTL` | `1800` | Idle seconds before a session is reaped |
 | `SANDBOX_REQUIRE_GVISOR` | unset | `1` = fail session creation if `runsc` is missing |
+| `SANDBOX_KEYSTORE` | unset | `dynamodb:<table>` or `sqlite:<path>`: enables self-service keys |
+| `SANDBOX_ADMIN_KEY` | unset | Enables the admin API (≥ 32 chars) |
 | `SANDBOX_TENANT_LIMITS` | built-in | JSON `{"*": {...defaults}, "tenant": {...overrides}}`; keys `max_sessions`, `requests_per_minute`, `max_concurrent_exec` |
 | `SANDBOX_TENANT_LIMITS_FILE` | — | Same, read from a file |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `512` | Disk quota per session workspace |
@@ -321,6 +356,7 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_runner.py` | Step 1 runner: output, exit codes, timeout, missing binary |
 | `tests/test_sandbox_paths.py` | Traversal, absolute paths, prefix-sibling dirs, symlinks to host files and dirs |
 | `tests/test_tracer_parse.py` | `strace -c` parsing with and without the errors column |
+| `tests/test_keystore.py` | Key store on SQLite and DynamoDB (moto): issue/authenticate, hash-only storage, immediate revocation through the cache, tenant isolation, limits, last-key guard |
 | `tests/test_limits.py` | Limits config (defaults, overrides, validation), token bucket with a fake clock, session and running-command limits, usage report |
 | `tests/test_sdk.py` | The SDK against the real API over HTTP: lifecycle, structured results, files, every error type, retries on 429/503 with `Retry-After`, agent tools in both formats, legacy text parsing, use with `AutonomousCodingAgent` |
 | `tests/test_mcp.py` | The MCP server through a real MCP client (in memory and as a real stdio process): tool list and hints, lazy session and cleanup on disconnect, tool errors, expired-session recovery, reset, info and egress log, sessions left by a killed run deleted on next start |
@@ -400,6 +436,9 @@ when the month's forecast exceeds 100%.
   ext4 filesystem of `workspaces_disk_gb` (default 15 GB) with project quotas, holding
   `workspace_slots` (default 100 = max concurrent sessions) directories of
   `workspace_quota_mb` (default 512 MB) each. Check usage with `sudo repquota -P /var/lib/agent-sandbox/workspaces`.
+- **Self-service keys:** a DynamoDB table (`agent-sandbox-api-keys`, deletion protection and
+  point-in-time recovery on) and a generated admin key in SSM. Load it with
+  `. .\scripts\demo-env.ps1 -Admin`, or print it with `terraform output -raw fetch_admin_key_command`.
 - **Tenant limits:** `-var 'tenant_limits={"*"={max_sessions=10}, acme={max_sessions=50}}'`
   (written to `/etc/agent-sandbox/tenant-limits.json`). Unset = built-in defaults.
 - **Egress:** `egress_policy` (default `{}`: no internet for anyone) is written to

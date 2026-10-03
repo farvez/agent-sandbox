@@ -144,6 +144,23 @@ All errors inherit from `SandboxError`:
 Rate limits (429) and a full server (503) are retried automatically, honouring the
 server's `Retry-After` (`max_retries=3` by default).
 
+## API keys
+
+Create, list and revoke keys without your operator's help — for example to rotate:
+
+```python
+from airlock_sandbox.keys import Keys
+
+keys = Keys()                          # uses SANDBOX_API_URL / SANDBOX_API_KEY
+new = keys.create(name="laptop-2026")  # new["api_key"] is shown only once — store it
+keys.revoke("<old key_id>")            # stops working immediately
+keys.list()
+```
+
+Or from the shell: `airlock-sandbox-keys create --name ci`, `airlock-sandbox-keys list`,
+`airlock-sandbox-keys revoke <key_id>`. Operators use `--admin` / `Keys(admin=True)` with
+`SANDBOX_ADMIN_KEY` to issue keys for any tenant.
+
 ## Account
 
 ```python

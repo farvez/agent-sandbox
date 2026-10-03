@@ -349,3 +349,98 @@ def test_exec_returns_structured_fields_and_text(client):
     assert body["stdout"] == "ran echo hi\n" and body["exit_code"] == 0
     assert body["timed_out"] is False and body["oom_killed"] is False and body["warnings"] == []
     assert body["output"] == "[STDOUT]:\nran echo hi\n[EXIT CODE]: 0"
+
+
+# ---------------------------------------------------------------- self-service API keys
+
+ADMIN = "a" * 40
+
+
+@pytest.fixture
+def keys(client, monkeypatch, tmp_path):
+    """Enables the key store (SQLite) and the admin key for one test."""
+    from src.api.keystore import KeyStore, SqliteBackend
+
+    store = KeyStore(SqliteBackend(str(tmp_path / "keys.db")))
+    monkeypatch.setattr(server, "KEYSTORE", store)
+    monkeypatch.setattr(server, "ADMIN_KEY", ADMIN)
+    return store
+
+
+def admin_issue(client, tenant="acme", name="laptop"):
+    res = client.post("/v1/admin/keys", json={"tenant": tenant, "name": name}, headers={"X-API-Key": ADMIN})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_admin_issues_a_key_that_works_immediately(client, keys):
+    issued = admin_issue(client, tenant="newco")
+    assert issued["api_key"].startswith("asb_") and "shown only once" in issued["note"]
+    res = client.post("/v1/sessions", json={}, headers={"X-API-Key": issued["api_key"]})
+    assert res.status_code == 201 and res.json()["tenant_id"] == "newco"
+
+
+def test_revoked_key_stops_working_immediately(client, keys):
+    issued = admin_issue(client)
+    auth = {"X-API-Key": issued["api_key"]}
+    assert client.get("/v1/usage", headers=auth).status_code == 200
+    assert client.delete(f"/v1/admin/keys/{issued['key_id']}", headers={"X-API-Key": ADMIN}).status_code == 200
+    assert client.get("/v1/usage", headers=auth).status_code == 401
+
+
+def test_listing_never_reveals_secrets(client, keys):
+    issued = admin_issue(client)
+    for res in (client.get("/v1/admin/keys", headers={"X-API-Key": ADMIN}),
+                client.get("/v1/keys", headers={"X-API-Key": issued["api_key"]})):
+        body = res.text
+        assert issued["api_key"] not in body and "key_hash" not in body and issued["key_id"] in body
+
+
+def test_tenant_rotates_its_own_key(client, keys):
+    old = admin_issue(client)
+    new = client.post("/v1/keys", json={"name": "rotated"}, headers={"X-API-Key": old["api_key"]}).json()
+    assert new["tenant_id"] == "acme"
+    revoked = client.delete(f"/v1/keys/{old['key_id']}", headers={"X-API-Key": new["api_key"]})
+    assert revoked.status_code == 200 and revoked.json()["active"] is False
+    assert client.get("/v1/usage", headers={"X-API-Key": old["api_key"]}).status_code == 401
+    assert client.get("/v1/usage", headers={"X-API-Key": new["api_key"]}).status_code == 200
+
+
+def test_tenant_cannot_revoke_its_last_key_or_another_tenants(client, keys):
+    acme = admin_issue(client, tenant="acme")
+    other = admin_issue(client, tenant="globex")
+    auth = {"X-API-Key": acme["api_key"]}
+    assert client.delete(f"/v1/keys/{acme['key_id']}", headers=auth).status_code == 409
+    assert client.delete(f"/v1/keys/{other['key_id']}", headers=auth).status_code == 404
+    assert [k["tenant_id"] for k in client.get("/v1/keys", headers=auth).json()["keys"]] == ["acme"]
+
+
+def test_static_keys_keep_working_next_to_the_store(client, keys):
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+
+
+def test_admin_key_cannot_run_sandboxes_and_tenant_keys_cannot_administer(client, keys):
+    assert client.post("/v1/sessions", json={}, headers={"X-API-Key": ADMIN}).status_code == 401
+    assert client.get("/v1/admin/keys", headers=AUTH).status_code == 401
+    assert client.post("/v1/admin/keys", json={"tenant": "x"}, headers=AUTH).status_code == 401
+
+
+def test_admin_validation(client, keys):
+    assert client.post("/v1/admin/keys", json={"tenant": "Bad Name"}, headers={"X-API-Key": ADMIN}).status_code == 400
+    assert client.delete("/v1/admin/keys/nosuchkey0", headers={"X-API-Key": ADMIN}).status_code == 404
+
+
+def test_features_report_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(server, "KEYSTORE", None)
+    monkeypatch.setattr(server, "ADMIN_KEY", None)
+    assert client.get("/v1/keys", headers=AUTH).status_code == 501
+    assert client.get("/v1/admin/keys", headers={"X-API-Key": ADMIN}).status_code == 404
+
+
+def test_short_admin_key_is_refused_at_startup(monkeypatch):
+    import importlib
+    monkeypatch.setenv("SANDBOX_ADMIN_KEY", "too-short")
+    with pytest.raises(RuntimeError, match="at least 32"):
+        importlib.reload(server)
+    monkeypatch.delenv("SANDBOX_ADMIN_KEY")
+    importlib.reload(server)

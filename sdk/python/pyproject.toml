@@ -29,6 +29,7 @@ mcp = ["mcp>=2.3,<3; python_version >= '3.10'"]
 
 [project.scripts]
 airlock-sandbox-mcp = "airlock_sandbox.mcp_server:main"
+airlock-sandbox-keys = "airlock_sandbox.keys:main"
 
 [project.urls]
 Homepage = "https://github.com/farvez/agent-sandbox"

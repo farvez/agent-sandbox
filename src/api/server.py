@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
+from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKey
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
@@ -22,7 +23,7 @@ from src.step5_agent.workspace_pool import QuotaExceededError, WorkspaceCapacity
 
 
 
-def load_api_keys(multi: Optional[str], single: Optional[str]) -> List[Tuple[bytes, str]]:
+def load_api_keys(multi: Optional[str], single: Optional[str], required: bool = True) -> List[Tuple[bytes, str]]:
     """Builds the (key, tenant_id) table from the environment.
 
     SANDBOX_API_KEYS="acme:<key>,globex:<key>" gives each tenant its own key;
@@ -41,14 +42,24 @@ def load_api_keys(multi: Optional[str], single: Optional[str]) -> List[Tuple[byt
         pairs.append(("default", single))
 
     if not pairs:
-        raise RuntimeError("No API keys configured. Set SANDBOX_API_KEYS or SANDBOX_API_KEY.")
+        if not required:
+            return []
+        raise RuntimeError("No API keys configured. Set SANDBOX_API_KEYS or SANDBOX_API_KEY, or SANDBOX_KEYSTORE.")
     keys = [key for _, key in pairs]
     if len(set(keys)) != len(keys):
         raise RuntimeError("The same API key is assigned to more than one tenant.")
     return [(key.encode(), tenant) for tenant, key in pairs]
 
 
-API_KEYS = load_api_keys(os.getenv("SANDBOX_API_KEYS"), os.getenv("SANDBOX_API_KEY"))
+# Self-service keys (issued/revoked at runtime) live in the key store; static keys from
+# configuration keep working alongside them.
+KEYSTORE = KeyStore.from_config(os.getenv("SANDBOX_KEYSTORE"), region=os.getenv("AWS_REGION"))
+API_KEYS = load_api_keys(os.getenv("SANDBOX_API_KEYS"), os.getenv("SANDBOX_API_KEY"), required=KEYSTORE is None)
+
+# The admin key manages keys for every tenant. It is not a tenant key: it can't run sandboxes.
+ADMIN_KEY = os.getenv("SANDBOX_ADMIN_KEY") or None
+if ADMIN_KEY is not None and len(ADMIN_KEY) < 32:
+    raise RuntimeError("SANDBOX_ADMIN_KEY must be at least 32 characters.")
 
 
 def load_egress_policy(raw: Optional[str], path: Optional[str]) -> Dict[str, List[str]]:
@@ -196,8 +207,10 @@ def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
     """Authenticates the caller and returns their tenant ID."""
     tenant_id = None
     if header_key:
+        if KEYSTORE is not None:
+            tenant_id = KEYSTORE.authenticate(header_key)
         presented = header_key.encode()
-        # Compare against every key without returning early, so response time
+        # Compare against every static key without returning early, so response time
         # doesn't reveal which (or whether any) configured key was close.
         for key, tenant in API_KEYS:
             if secrets.compare_digest(presented, key):
@@ -286,6 +299,83 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
         created_at=time.time(),
         status="ready",
     )
+
+
+# ------------------------------------------------------------------ API keys
+
+class CreateKeyRequest(BaseModel):
+    name: str = Field(default="", max_length=100, description="Label to recognise the key by, e.g. 'laptop' or 'ci'")
+
+
+class AdminCreateKeyRequest(CreateKeyRequest):
+    tenant: str = Field(..., description="Tenant the key belongs to; created implicitly by its first key")
+
+
+def require_keystore() -> KeyStore:
+    if KEYSTORE is None:
+        raise HTTPException(status_code=501, detail="Self-service keys are not enabled on this server (SANDBOX_KEYSTORE).")
+    return KEYSTORE
+
+
+def verify_admin(header_key: Optional[str] = Security(api_key_header)) -> None:
+    if ADMIN_KEY is None:
+        raise HTTPException(status_code=404, detail="The admin API is not enabled on this server.")
+    if not header_key or not secrets.compare_digest(header_key.encode(), ADMIN_KEY.encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing admin key")
+
+
+def _issue(tenant_id: str, name: str) -> dict:
+    try:
+        record, api_key = require_keystore().issue(tenant_id, name)
+    except KeyLimitReached as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**record.public(), "api_key": api_key,
+            "note": "Store this key now: it is shown only once and can't be recovered."}
+
+
+def _revoke(key_id: str, tenant_id: Optional[str], keep_one: bool) -> dict:
+    try:
+        record = require_keystore().revoke(key_id, tenant_id=tenant_id, keep_one=keep_one)
+    except UnknownKey as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LastActiveKey as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return record.public()
+
+
+@app.get("/v1/keys")
+def list_own_keys(tenant_id: str = Security(authorize)):
+    """This tenant's self-service keys (never the secrets). Static keys from configuration aren't listed."""
+    return {"tenant_id": tenant_id, "keys": [r.public() for r in require_keystore().list(tenant_id)]}
+
+
+@app.post("/v1/keys", status_code=status.HTTP_201_CREATED)
+def create_own_key(request: CreateKeyRequest, tenant_id: str = Security(authorize)):
+    """Issues another key for this tenant, e.g. to rotate: create new, switch over, revoke old."""
+    return _issue(tenant_id, request.name)
+
+
+@app.delete("/v1/keys/{key_id}")
+def revoke_own_key(key_id: str, tenant_id: str = Security(authorize)):
+    """Revokes one of this tenant's keys, effective immediately. Refuses the last active one."""
+    return _revoke(key_id, tenant_id=tenant_id, keep_one=True)
+
+
+@app.get("/v1/admin/keys", dependencies=[Security(verify_admin)])
+def admin_list_keys(tenant: Optional[str] = None):
+    return {"keys": [r.public() for r in require_keystore().list(tenant)]}
+
+
+@app.post("/v1/admin/keys", status_code=status.HTTP_201_CREATED, dependencies=[Security(verify_admin)])
+def admin_create_key(request: AdminCreateKeyRequest):
+    return _issue(request.tenant, request.name)
+
+
+@app.delete("/v1/admin/keys/{key_id}", dependencies=[Security(verify_admin)])
+def admin_revoke_key(key_id: str):
+    return _revoke(key_id, tenant_id=None, keep_one=False)
 
 
 @app.get("/v1/usage")

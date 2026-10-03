@@ -169,6 +169,36 @@ resource "aws_ssm_parameter" "api_keys" {
   value = join(",", [for t in var.tenants : "${t}:${random_password.tenant_key[t].result}"])
 }
 
+# 4b. Self-service keys: issued and revoked at runtime (POST/DELETE /v1/keys and
+#     /v1/admin/keys) and stored as SHA-256 hashes in DynamoDB, so they survive
+#     redeploys. The admin key manages every tenant's keys; it can't run sandboxes.
+resource "aws_dynamodb_table" "api_keys" {
+  name                        = "agent-sandbox-api-keys"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "key_id"
+  deletion_protection_enabled = true
+
+  attribute {
+    name = "key_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+}
+
+resource "random_password" "admin_key" {
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "admin_key" {
+  name  = "/agent-sandbox/admin-key"
+  type  = "SecureString"
+  value = random_password.admin_key.result
+}
+
 # 5. Instance role: read the bundle and the key, and allow SSM Session Manager.
 resource "aws_iam_role" "sandbox_host" {
   name_prefix = "agent-sandbox-host-"
@@ -201,7 +231,12 @@ resource "aws_iam_role_policy" "sandbox_host" {
       {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = aws_ssm_parameter.api_keys.arn
+        Resource = [aws_ssm_parameter.api_keys.arn, aws_ssm_parameter.admin_key.arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
+        Resource = aws_dynamodb_table.api_keys.arn
       },
     ]
   })
@@ -277,6 +312,8 @@ resource "aws_instance" "sandbox_host" {
     workspace_quota_mb = var.workspace_quota_mb
     tenant_limits_json = jsonencode(var.tenant_limits)
     public_ip          = aws_eip.sandbox.public_ip
+    admin_key_param    = aws_ssm_parameter.admin_key.name
+    keys_table         = aws_dynamodb_table.api_keys.name
   })
 
   # A new code bundle produces new user_data, which replaces the host.
