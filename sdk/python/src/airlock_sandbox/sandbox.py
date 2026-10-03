@@ -7,8 +7,8 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
-from agent_sandbox._http import HTTPClient
-from agent_sandbox.errors import CommandError, SandboxError
+from airlock_sandbox._http import HTTPClient
+from airlock_sandbox.errors import CommandError, SandboxError
 
 DEFAULT_TEMPLATE = "sandbox-base:latest"
 
@@ -150,10 +150,10 @@ class Sandbox:
         if verify is None:
             verify = not _env_flag("SANDBOX_API_INSECURE")
 
-        from agent_sandbox import __version__  # late import: avoids a cycle
+        from airlock_sandbox import __version__  # late import: avoids a cycle
 
         self._http = HTTPClient(base_url, api_key, verify=verify, timeout=timeout, max_retries=max_retries,
-                                user_agent=f"agent-sandbox-sdk/{__version__}")
+                                user_agent=f"airlock-sandbox/{__version__}")
         self.template = template
         self.requested_egress = list(egress or [])
         self.files = Files(self)

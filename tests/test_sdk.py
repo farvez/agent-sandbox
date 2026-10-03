@@ -7,9 +7,9 @@ import time
 import pytest
 import uvicorn
 
-import agent_sandbox._http as sdk_http
+import airlock_sandbox._http as sdk_http
 import src.api.server as server
-from agent_sandbox import (
+from airlock_sandbox import (
     AuthenticationError,
     CapacityError,
     CommandError,
@@ -21,7 +21,7 @@ from agent_sandbox import (
     SandboxError,
     ValidationError,
 )
-from agent_sandbox.tools import anthropic_tools, handle_tool_call, openai_tools
+from airlock_sandbox.tools import anthropic_tools, handle_tool_call, openai_tools
 from src.api.limits import LimitTracker, load_tenant_limits
 from tests.conftest import TENANT_KEYS
 from tests.test_api_server import FakeWorkspace
@@ -217,7 +217,7 @@ def test_full_server_raises_capacity_error_after_retries(api_url, monkeypatch):
 
 
 def test_server_unreachable(monkeypatch):
-    from agent_sandbox import APIConnectionError
+    from airlock_sandbox import APIConnectionError
     monkeypatch.setattr(sdk_http.time, "sleep", lambda s: None)
     with pytest.raises(APIConnectionError):
         Sandbox(api_key=KEY, base_url="http://127.0.0.1:9", timeout=2).start()
@@ -328,7 +328,7 @@ def test_sdk_sandbox_plugs_into_the_repo_agent(sbx):
     ],
 )
 def test_text_only_output_is_split_into_fields(text, expected):
-    from agent_sandbox import CommandResult
+    from airlock_sandbox import CommandResult
     result = CommandResult.from_response({"command": "x", "output": text})
     for key, value in expected.items():
         assert getattr(result, key) == value, key

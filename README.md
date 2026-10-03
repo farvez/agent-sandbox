@@ -131,12 +131,12 @@ python test_api.py        # end-to-end smoke test; reads SANDBOX_API_KEY and SAN
 
 ### Python SDK
 
-`sdk/python` is the client developers install — `pip install agent-sandbox-sdk`
+`sdk/python` is the client developers install — `pip install airlock-sandbox`
 (standard library only, Python 3.9+). Full guide: [sdk/python/README.md](sdk/python/README.md).
 
 ```python
-from agent_sandbox import Sandbox
-from agent_sandbox.tools import openai_tools, anthropic_tools, handle_tool_call
+from airlock_sandbox import Sandbox
+from airlock_sandbox.tools import openai_tools, anthropic_tools, handle_tool_call
 
 with Sandbox(base_url="https://<host>", api_key="<key>", egress=["pypi"]) as sbx:
     sbx.run("pip install requests", timeout=60).check()
@@ -156,11 +156,11 @@ with Sandbox(base_url="https://<host>", api_key="<key>", egress=["pypi"]) as sbx
 - Reads `SANDBOX_API_URL`, `SANDBOX_API_KEY` and `SANDBOX_API_INSECURE=1` when arguments
   are omitted. For development: `pip install -e ./sdk/python` (included in `requirements-dev.txt`).
 
-**Releasing:** bump `__version__` in `sdk/python/src/agent_sandbox/__init__.py`, then push a
+**Releasing:** bump `__version__` in `sdk/python/src/airlock_sandbox/__init__.py`, then push a
 tag `sdk-v<version>`; `.github/workflows/release-sdk.yml` builds and publishes to PyPI with
 trusted publishing (no stored token). Running that workflow manually publishes to TestPyPI.
 One-time setup: on pypi.org and test.pypi.org, add a pending publisher for project
-`agent-sandbox-sdk`, owner `farvez`, repository `agent-sandbox`, workflow `release-sdk.yml`,
+`airlock-sandbox`, owner `farvez`, repository `agent-sandbox`, workflow `release-sdk.yml`,
 environment `pypi` / `testpypi`.
 
 ### Live demo
@@ -384,7 +384,7 @@ than a benchmark score.
 │   ├── step1_runner/ … step5_agent/
 │   ├── egress/             # allowlisting HTTPS proxy + Docker wiring
 │   └── api/server.py
-├── sdk/python/             # agent-sandbox-sdk: the Python SDK (pip package)
+├── sdk/python/             # airlock-sandbox: the Python SDK (pip package)
 ├── terraform/              # AWS deployment
 └── tests/                  # pytest suite
 ```
@@ -397,3 +397,7 @@ than a benchmark score.
 - JavaScript/TypeScript SDK
 - Egress: human approval for new hosts, log rotation, per-tenant bandwidth limits
 - Repeated eval runs with pass@k, and logging whether the agent attempted exfiltration
+
+## License
+
+MIT — see [LICENSE](LICENSE).

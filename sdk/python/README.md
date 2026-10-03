@@ -1,11 +1,11 @@
-# agent-sandbox-sdk
+# airlock-sandbox
 
 Python SDK for [agent-sandbox](https://github.com/farvez/agent-sandbox): run code from
 AI agents in isolated gVisor containers — no network unless you allow it, hard memory,
 CPU, process and disk limits, and every outbound connection logged.
 
 ```bash
-pip install agent-sandbox-sdk
+pip install airlock-sandbox
 ```
 
 No dependencies; Python 3.9+.
@@ -13,7 +13,7 @@ No dependencies; Python 3.9+.
 ## Quick start
 
 ```python
-from agent_sandbox import Sandbox
+from airlock_sandbox import Sandbox
 
 with Sandbox(api_key="...", base_url="https://sandbox.example.com") as sbx:
     sbx.files.write("main.py", "print(2 ** 16)")
@@ -60,8 +60,8 @@ Only HTTPS to the listed hosts works; everything else is refused and logged.
 ## Use as tools for an LLM agent
 
 ```python
-from agent_sandbox import Sandbox
-from agent_sandbox.tools import openai_tools, anthropic_tools, handle_tool_call
+from airlock_sandbox import Sandbox
+from airlock_sandbox.tools import openai_tools, anthropic_tools, handle_tool_call
 
 # OpenAI
 response = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=openai_tools())
@@ -104,3 +104,7 @@ server's `Retry-After` (`max_retries=3` by default).
 sbx.usage()    # {"limits": {...}, "sessions_open": 1, "commands_running": 0, "requests_available": 118}
 sbx.health()
 ```
+
+## License
+
+MIT

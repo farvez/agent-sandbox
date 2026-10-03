@@ -61,7 +61,7 @@ jobs:
         run: |
           pip install sdk/python/dist/*.whl pytest
           cd sdk/python
-          python -c "import agent_sandbox, sys; assert 'site-packages' in agent_sandbox.__file__, agent_sandbox.__file__"
+          python -c "import airlock_sandbox, sys; assert 'site-packages' in airlock_sandbox.__file__, airlock_sandbox.__file__"
           pytest -q tests -p no:cacheprovider
 
   terraform:

@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional, Union
 
-from agent_sandbox.errors import STATUS_ERRORS, APIConnectionError, RateLimitError, SandboxError
+from airlock_sandbox.errors import STATUS_ERRORS, APIConnectionError, RateLimitError, SandboxError
 
 IDEMPOTENT = {"GET", "DELETE"}
 
@@ -32,7 +32,7 @@ class HTTPClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.max_retry_wait = max_retry_wait
-        self.user_agent = user_agent or f"agent-sandbox-sdk python/{platform.python_version()}"
+        self.user_agent = user_agent or f"airlock-sandbox python/{platform.python_version()}"
         if verify is False:
             # For a server without a domain (self-signed certificate). Prefer passing the CA file.
             self._ssl: Optional[ssl.SSLContext] = ssl._create_unverified_context()

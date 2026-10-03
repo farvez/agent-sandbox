@@ -126,7 +126,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <li>Each key belongs to a tenant; tenants can't see each other's sessions</li>
       <li>Per-tenant limits: sessions, requests per minute, concurrent commands</li>
       <li>Image allowlist; path and symlink escapes refused</li>
-      <li>Python SDK (<code>agent-sandbox-sdk</code>): structured results, typed errors, automatic retries, ready-made OpenAI and Anthropic agent tools</li></ul></div>
+      <li>Python SDK (<code>airlock-sandbox</code>): structured results, typed errors, automatic retries, ready-made OpenAI and Anthropic agent tools</li></ul></div>
     <div class="card"><span class="who">Egress gateway</span><h3>Internet only where approved</h3><ul>
       <li>Per-tenant allowlist; sessions opt in, e.g. <code>egress=["pypi"]</code></li>
       <li>Each session on its own private network; the proxy is the only way out</li>
@@ -207,7 +207,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     <div class="card"><span class="who">Built</span><h3>Egress gateway</h3><p>Per-tenant allowlist with every outbound connection logged. Next: human approval for hosts outside the list.</p></div>
     <div class="card"><h3>Command audit log</h3><p>Every command and file write per tenant alongside the egress log, exportable for compliance.</p></div>
     <div class="card"><h3>Persistent sessions</h3><p>A container that lives for the session, so agents can install packages and run servers.</p></div>
-    <div class="card"><span class="who">Built</span><h3>Python SDK</h3><p><code>pip install agent-sandbox-sdk</code>, with drop-in tool definitions for OpenAI and Anthropic agents. Next: an MCP server.</p></div>
+    <div class="card"><span class="who">Built</span><h3>Python SDK</h3><p><code>pip install airlock-sandbox</code>, with drop-in tool definitions for OpenAI and Anthropic agents. Next: an MCP server.</p></div>
   </div>
 </section>
 

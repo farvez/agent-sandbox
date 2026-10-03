@@ -1,13 +1,13 @@
 """Python SDK for agent-sandbox: isolated, network-controlled code execution for AI agents.
 
-    from agent_sandbox import Sandbox
+    from airlock_sandbox import Sandbox
 
     with Sandbox(egress=["pypi"]) as sbx:
         sbx.run("pip install requests", timeout=60).check()
         sbx.files.write("main.py", "import requests; print(requests.__version__)")
         print(sbx.run("python3 main.py").stdout)
 """
-from agent_sandbox.errors import (
+from airlock_sandbox.errors import (
     APIConnectionError,
     AuthenticationError,
     CapacityError,
@@ -19,7 +19,7 @@ from agent_sandbox.errors import (
     SandboxError,
     ValidationError,
 )
-from agent_sandbox.sandbox import CommandResult, Files, Sandbox
+from airlock_sandbox.sandbox import CommandResult, Files, Sandbox
 
 __version__ = "0.1.0"
 

@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from agent_sandbox import AuthenticationError, RateLimitError, Sandbox
+from airlock_sandbox import AuthenticationError, RateLimitError, Sandbox
 
 load_dotenv()
 console = Console()

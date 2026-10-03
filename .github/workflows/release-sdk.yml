@@ -6,7 +6,7 @@ name: Release SDK
 #
 # Uses PyPI trusted publishing — no API token is stored anywhere. One-time setup on
 # pypi.org (and test.pypi.org): Account → Publishing → add a pending publisher for
-# project "agent-sandbox-sdk", owner "farvez", repository "agent-sandbox",
+# project "airlock-sandbox", owner "farvez", repository "agent-sandbox",
 # workflow "release-sdk.yml", environment "pypi" (TestPyPI: "testpypi").
 
 on:
@@ -30,7 +30,7 @@ jobs:
       - name: Check the tag matches the package version
         if: github.event_name == 'push'
         run: |
-          version=$(python -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('sdk/python/src/agent_sandbox/__init__.py').read()).group(1))")
+          version=$(python -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('sdk/python/src/airlock_sandbox/__init__.py').read()).group(1))")
           if [ "sdk-v$version" != "$GITHUB_REF_NAME" ]; then
             echo "Tag $GITHUB_REF_NAME does not match package version $version"; exit 1
           fi

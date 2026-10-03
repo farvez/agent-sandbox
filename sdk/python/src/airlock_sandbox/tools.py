@@ -1,7 +1,7 @@
 """Ready-made tools for LLM agents: read files, write files, run commands — in a sandbox.
 
-    from agent_sandbox import Sandbox
-    from agent_sandbox.tools import openai_tools, handle_tool_call
+    from airlock_sandbox import Sandbox
+    from airlock_sandbox.tools import openai_tools, handle_tool_call
 
     with Sandbox() as sbx:
         response = client.chat.completions.create(model=..., messages=..., tools=openai_tools())
@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Union
 
-from agent_sandbox.errors import SandboxError
+from airlock_sandbox.errors import SandboxError
 
 MAX_TOOL_OUTPUT_CHARS = 8000
 

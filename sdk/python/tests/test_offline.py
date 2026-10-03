@@ -3,22 +3,22 @@ import json
 
 import pytest
 
-import agent_sandbox
-from agent_sandbox import (
+import airlock_sandbox
+from airlock_sandbox import (
     CommandError,
     CommandResult,
     RateLimitError,
     Sandbox,
     SandboxError,
 )
-from agent_sandbox.errors import STATUS_ERRORS
-from agent_sandbox.tools import anthropic_tools, handle_tool_call, openai_tools, truncate
+from airlock_sandbox.errors import STATUS_ERRORS
+from airlock_sandbox.tools import anthropic_tools, handle_tool_call, openai_tools, truncate
 
 
 def test_version_and_public_api():
-    assert agent_sandbox.__version__.count(".") == 2
-    for name in agent_sandbox.__all__:
-        assert hasattr(agent_sandbox, name), name
+    assert airlock_sandbox.__version__.count(".") == 2
+    for name in airlock_sandbox.__all__:
+        assert hasattr(airlock_sandbox, name), name
 
 
 def test_needs_url_and_key(monkeypatch):
