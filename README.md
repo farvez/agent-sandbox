@@ -349,6 +349,9 @@ terraform apply -var 'allowed_ingress_cidrs=["<your-ip>/32"]' -var 'tenants=["de
 $(terraform output -raw fetch_api_keys_command)   # prints tenant:key pairs
 ```
 
+- **Settings file:** put your variables in `terraform/terraform.tfvars` (git-ignored) so every
+  `plan` / `apply` / `destroy` uses the same values — forgetting `domain_name` on one apply
+  would switch the server back to a self-signed certificate.
 - **TLS:** set `-var domain_name=sandbox.example.com` (DNS A record → instance IP) for a
   Let's Encrypt certificate; without it Caddy serves a self-signed certificate on the IP
   (`curl -k`).
