@@ -5,7 +5,7 @@ import uuid
 from typing import Dict, List, Optional
 import docker
 
-from src.egress.gateway import EgressGateway, get_gateway
+from src.egress.gateway import EgressGateway, EgressSession, get_gateway
 from src.egress.proxy import expand_rules
 from src.step4_gvisor.gvisor_runner import GVisorSandboxRunner
 
@@ -54,8 +54,7 @@ class SandboxedWorkspace:
 
         self.egress_rules = expand_rules(egress or [])
         self.gateway: Optional[EgressGateway] = None
-        self.egress_network: Optional[str] = None
-        self.proxy_url: Optional[str] = None
+        self.egress: Optional[EgressSession] = None
         if self.egress_rules:
             try:
                 self._connect_egress(gateway)
@@ -69,9 +68,15 @@ class SandboxedWorkspace:
             runtime="runsc" if self.has_gvisor else None,
             user=self.container_user,
         )
-        self.egress_network, proxy_ip = self.gateway.attach(self.session_id)
-        token = self.gateway.issue_pass(self.session_id, self.tenant_id, self.egress_rules)
-        self.proxy_url = self.gateway.proxy_url(self.session_id, token, proxy_ip)
+        self.egress = self.gateway.attach(self.session_id, self.tenant_id, self.egress_rules)
+
+    @property
+    def egress_network(self) -> Optional[str]:
+        return self.egress.network_name if self.egress else None
+
+    @property
+    def proxy_url(self) -> Optional[str]:
+        return self.egress.proxy_url if self.egress else None
 
     def egress_events(self, limit: int = 200) -> List[dict]:
         return self.gateway.events(self.session_id, limit) if self.gateway else []
@@ -201,9 +206,9 @@ class SandboxedWorkspace:
 
     def cleanup(self):
         """Wipes the ephemeral workspace directory and removes the session's egress network."""
-        if self.gateway and self.egress_network:
-            self.gateway.detach(self.egress_network)
-            self.egress_network = None
+        if self.gateway and self.egress:
+            self.gateway.detach(self.egress)
+            self.egress = None
         if os.path.exists(self.workspace_dir):
             shutil.rmtree(self.workspace_dir, ignore_errors=True)
 

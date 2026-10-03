@@ -1,16 +1,23 @@
-"""Runs the egress proxy container and wires sandbox sessions to it.
+"""Runs egress proxy containers and wires sandbox sessions to them.
 
-Each session that is granted internet access gets its own `internal` Docker
-network (no route out) containing only that session's containers and the
-proxy. Sessions therefore can't reach each other, and code that ignores the
-proxy settings has nowhere to send packets.
+Each session that is granted internet access gets:
+  * its own `internal` Docker network (no route out), and
+  * its own proxy container, attached to that network and to the default
+    bridge *before* it starts, with its own signing key.
+
+Attaching both networks before start matters under gVisor: runsc fixes a
+sandbox's network interfaces at start and never sees networks connected later.
+A proxy per session also means tenants never share a proxy process or key.
+Sessions can't reach each other, and code that ignores the proxy settings has
+nowhere to send packets.
 """
 import json
 import os
 import secrets
 import tempfile
 import threading
-from typing import List, Optional, Tuple
+import time
+from typing import List, Optional
 
 import docker
 from docker.errors import NotFound
@@ -20,11 +27,52 @@ from src.egress.proxy import sign_pass
 PROXY_PORT = 3128
 PROXY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
 LABEL = "agent-sandbox.egress"
+READY_TIMEOUT = 20
+
+
+RESOLV_CONF_CANDIDATES = ("/run/systemd/resolve/resolv.conf", "/etc/resolv.conf")
+
+
+def upstream_nameservers(override: Optional[str] = None, candidates=RESOLV_CONF_CANDIDATES) -> List[str]:
+    """The host's real DNS servers, for the proxy's own resolv.conf.
+
+    Containers on custom Docker networks get Docker's embedded resolver
+    (127.0.0.11), which relies on iptables rules that gVisor's network stack
+    ignores, so under runsc every lookup fails. The proxy is pointed at the
+    upstream servers directly instead. Loopback entries (systemd-resolved's
+    127.0.0.53 stub) are skipped because they aren't reachable from a container.
+    SANDBOX_EGRESS_DNS="10.0.0.2,1.1.1.1" overrides detection.
+    """
+    if override:
+        return [ns.strip() for ns in override.split(",") if ns.strip()]
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        servers = []
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "nameserver":
+                ns = parts[1]
+                if not (ns.startswith("127.") or ns == "::1"):
+                    servers.append(ns)
+        if servers:
+            return servers
+    return []
+
+
+class EgressSession:
+    """The network, proxy and proxy URL belonging to one sandbox session."""
+
+    def __init__(self, network_name: str, container, proxy_url: str):
+        self.network_name = network_name
+        self.container = container
+        self.proxy_url = proxy_url
 
 
 class EgressGateway:
-    container_name = "agent-sandbox-egress"
-
     def __init__(
         self,
         client: docker.DockerClient,
@@ -37,138 +85,140 @@ class EgressGateway:
         self.image = image
         self.runtime = runtime
         self.user = user
-        # A fresh signing key per API process: passes from a previous run stop working.
-        self.secret = secrets.token_bytes(32)
         self.log_dir = os.path.realpath(
             log_dir or os.getenv("SANDBOX_EGRESS_LOG_DIR") or os.path.join(tempfile.gettempdir(), "agent_sandbox_egress")
         )
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_path = os.path.join(self.log_dir, "egress.jsonl")
-        self._container = None
-        self._started = False
         self._lock = threading.Lock()
+        self._pruned = False
 
-    # ------------------------------------------------------------- proxy container
+        # On a Linux host, give proxies the host's upstream DNS (see upstream_nameservers).
+        # On Docker Desktop there is no such file, and Docker's embedded DNS works there.
+        self.resolv_conf: Optional[str] = None
+        servers = upstream_nameservers(os.getenv("SANDBOX_EGRESS_DNS"))
+        if servers:
+            conf_dir = os.path.join(self.log_dir, "_conf")
+            os.makedirs(conf_dir, exist_ok=True)
+            self.resolv_conf = os.path.join(conf_dir, "resolv.conf")
+            with open(self.resolv_conf, "w", encoding="utf-8") as f:
+                f.write("".join(f"nameserver {ns}\n" for ns in servers))
 
-    def _ensure_running(self) -> None:
-        if self._container is not None:
+    def _prune_orphans(self) -> None:
+        """Once per process: proxies and networks left by an earlier API process
+        belong to sessions that died with it. (Never later: those would be live.)"""
+        if self._pruned:
+            return
+        for container in self.client.containers.list(all=True, filters={"label": LABEL}):
             try:
-                self._container.reload()
-                if self._container.status == "running":
-                    return
-            except NotFound:
+                container.remove(force=True)
+            except Exception:
                 pass
+        for network in self.client.networks.list(filters={"label": LABEL}):
+            try:
+                network.remove()
+            except Exception:
+                pass
+        self._pruned = True
 
-        # A container left by an earlier API process holds an old signing key.
-        try:
-            self.client.containers.get(self.container_name).remove(force=True)
-        except NotFound:
-            pass
-        if not self._started:
-            # First start in this process: leftover session networks belong to
-            # sessions that died with an earlier process. (Never prune later on:
-            # live sessions would lose their networks.)
-            for network in self.client.networks.list(filters={"label": LABEL}):
-                try:
-                    network.remove()
-                except Exception:
-                    pass
-            self._started = True
-
-        kwargs = dict(
-            image=self.image,
-            name=self.container_name,
-            command=["python3", "/app/proxy.py"],
-            environment={
-                "EGRESS_SECRET": self.secret.hex(),
-                "EGRESS_LOG": "/logs/egress.jsonl",
-                "EGRESS_PORT": str(PROXY_PORT),
-            },
-            volumes={
-                PROXY_SCRIPT: {"bind": "/app/proxy.py", "mode": "ro"},
-                self.log_dir: {"bind": "/logs", "mode": "rw"},
-            },
-            network="bridge",  # the proxy's own route to the internet
-            read_only=True,
-            tmpfs={"/tmp": "size=16m"},
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges:true"],
-            mem_limit="128m",
-            pids_limit=128,
-            labels={LABEL: "proxy"},
-            restart_policy={"Name": "on-failure", "MaximumRetryCount": 5},
-            detach=True,
-        )
-        if self.runtime:
-            kwargs["runtime"] = self.runtime
-        if self.user:
-            kwargs["user"] = self.user
-        self._container = self.client.containers.create(**kwargs)
-        self._container.start()
+    def log_path(self, session_id: str) -> str:
+        return os.path.join(self.log_dir, f"{session_id}.jsonl")
 
     # ------------------------------------------------------------- per session
 
-    def attach(self, session_id: str) -> Tuple[str, str]:
-        """Creates the session's private network and returns (network name, proxy IP on it)."""
+    def attach(self, session_id: str, tenant_id: str, rules: List[str], ttl_seconds: int = 86400) -> EgressSession:
+        """Creates the session's private network and proxy; returns once the proxy is listening."""
         with self._lock:
-            self._ensure_running()
-            name = f"agent-sandbox-egress-{session_id}"
-            network = self.client.networks.create(
-                name, driver="bridge", internal=True, labels={LABEL: session_id}
+            self._prune_orphans()
+
+        name = f"agent-sandbox-egress-{session_id}"
+        secret = secrets.token_bytes(32)  # this session's proxy only accepts passes signed with it
+        network = self.client.networks.create(name, driver="bridge", internal=True, labels={LABEL: session_id})
+        container = None
+        try:
+            kwargs = dict(
+                image=self.image,
+                name=name,
+                command=["python3", "/app/proxy.py"],
+                environment={
+                    "EGRESS_SECRET": secret.hex(),
+                    "EGRESS_LOG": f"/logs/{session_id}.jsonl",
+                    "EGRESS_PORT": str(PROXY_PORT),
+                },
+                volumes={
+                    PROXY_SCRIPT: {"bind": "/app/proxy.py", "mode": "ro"},
+                    self.log_dir: {"bind": "/logs", "mode": "rw"},
+                },
+                network=name,  # the session side
+                read_only=True,
+                tmpfs={"/tmp": "size=16m"},
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                mem_limit="128m",
+                pids_limit=64,
+                labels={LABEL: session_id},
+                detach=True,
             )
-            try:
-                network.connect(self._container)
-                self._container.reload()
-                ip = self._container.attrs["NetworkSettings"]["Networks"][name]["IPAddress"]
-            except Exception:
-                network.remove()
-                raise
-            return name, ip
-
-    def detach(self, network_name: str) -> None:
-        try:
-            network = self.client.networks.get(network_name)
-        except NotFound:
-            return
-        try:
-            network.disconnect(self.container_name, force=True)
+            if self.runtime:
+                kwargs["runtime"] = self.runtime
+            if self.user:
+                kwargs["user"] = self.user
+            if self.resolv_conf:
+                kwargs["volumes"][self.resolv_conf] = {"bind": "/etc/resolv.conf", "mode": "ro"}
+            container = self.client.containers.create(**kwargs)
+            # The internet side, connected before start so gVisor sees both interfaces.
+            self.client.networks.get("bridge").connect(container)
+            container.start()
+            self._wait_until_listening(container)
+            container.reload()
+            ip = container.attrs["NetworkSettings"]["Networks"][name]["IPAddress"]
         except Exception:
-            pass
-        try:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    pass
             network.remove()
-        except Exception:
-            pass
+            raise
 
-    def issue_pass(self, session_id: str, tenant_id: str, rules: List[str], ttl_seconds: int = 86400) -> str:
-        return sign_pass(self.secret, session_id, tenant_id, rules, ttl_seconds)
+        token = sign_pass(secret, session_id, tenant_id, rules, ttl_seconds)
+        return EgressSession(name, container, f"http://{session_id}:{token}@{ip}:{PROXY_PORT}")
 
     @staticmethod
-    def proxy_url(session_id: str, token: str, proxy_ip: str) -> str:
-        return f"http://{session_id}:{token}@{proxy_ip}:{PROXY_PORT}"
+    def _wait_until_listening(container) -> None:
+        deadline = time.monotonic() + READY_TIMEOUT
+        while time.monotonic() < deadline:
+            if b"listening" in container.logs():
+                return
+            container.reload()
+            if container.status == "exited":
+                raise RuntimeError(f"Egress proxy exited: {container.logs()[-500:].decode(errors='replace')}")
+            time.sleep(0.2)
+        raise RuntimeError("Egress proxy did not start in time")
+
+    def detach(self, egress: EgressSession) -> None:
+        try:
+            egress.container.remove(force=True)
+        except Exception:
+            pass
+        try:
+            self.client.networks.get(egress.network_name).remove()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------- audit log
 
     def events(self, session_id: str, limit: int = 200) -> List[dict]:
-        if not os.path.exists(self.log_path):
+        path = self.log_path(session_id)
+        if not os.path.exists(path):
             return []
-        matches = []
-        with open(self.log_path, encoding="utf-8") as f:
+        events = []
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 try:
-                    event = json.loads(line)
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-                if event.get("session") == session_id:
-                    matches.append(event)
-        return matches[-limit:]
-
-    def shutdown(self) -> None:
-        if self._container is not None:
-            try:
-                self._container.remove(force=True)
-            except Exception:
-                pass
-            self._container = None
+        return events[-limit:]
 
 
 _gateway: Optional[EgressGateway] = None
@@ -176,7 +226,7 @@ _gateway_lock = threading.Lock()
 
 
 def get_gateway(client: docker.DockerClient, **kwargs) -> EgressGateway:
-    """One gateway (one proxy container, one signing key) per process."""
+    """One gateway per process (it owns orphan cleanup and the log directory)."""
     global _gateway
     with _gateway_lock:
         if _gateway is None:
@@ -185,8 +235,10 @@ def get_gateway(client: docker.DockerClient, **kwargs) -> EgressGateway:
 
 
 def shutdown_gateway() -> None:
+    """Forgets the gateway so the next one prunes orphans again (used by API shutdown and tests).
+
+    Live sessions remove their own proxy and network in SandboxedWorkspace.cleanup().
+    """
     global _gateway
     with _gateway_lock:
-        if _gateway is not None:
-            _gateway.shutdown()
-            _gateway = None
+        _gateway = None

@@ -130,11 +130,14 @@ def test_egress_network_removed_on_cleanup():
     import docker
     from src.egress.gateway import shutdown_gateway
 
+    client = docker.from_env()
     ws = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_cleanup")
     name = ws.egress_network
+    assert client.containers.get(name).status == "running"   # this session's own proxy
     ws.cleanup()
     shutdown_gateway()
-    assert not docker.from_env().networks.list(names=[name])
+    assert not client.networks.list(names=[name])
+    assert not client.containers.list(all=True, filters={"name": name})
 
 
 def test_sessions_get_separate_networks():
@@ -144,7 +147,16 @@ def test_sessions_get_separate_networks():
     b = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_b")
     try:
         assert a.egress_network != b.egress_network
-        assert a.proxy_url.split("@")[1] != b.proxy_url.split("@")[1]  # different proxy IPs
+        assert a.egress.container.id != b.egress.container.id         # separate proxy processes
+        # Different signing keys: a's pass is refused by b's proxy.
+        token_a = a.proxy_url.split("@")[0].split(":")[-1]
+        b_proxy = b.proxy_url.split("@")[1]
+        forged = f"http://sbx_pytest_b:{token_a}@{b_proxy}"
+        out = b.run_command(
+            f"HTTPS_PROXY={forged} https_proxy={forged} python3 -c \"import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=10)\" 2>&1 | tail -1",
+            timeout_seconds=30,
+        )
+        assert "407" in out
     finally:
         a.cleanup()
         b.cleanup()
@@ -158,10 +170,12 @@ def test_first_start_prunes_orphaned_networks_but_never_live_ones():
     client = docker.from_env()
     shutdown_gateway()
     orphan = client.networks.create("agent-sandbox-egress-sbx_orphan", internal=True, labels={LABEL: "sbx_orphan"})
+    orphan_proxy = client.containers.create("sandbox-base:latest", "sleep 600", labels={LABEL: "sbx_orphan"})
     a = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_live_a")
     b = None
     try:
         assert not client.networks.list(names=[orphan.name])        # pruned on first start
+        assert not client.containers.list(all=True, filters={"id": orphan_proxy.id})
         b = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_live_b")
         assert client.networks.list(names=[a.egress_network])        # a's network survives b's arrival
         assert "[EXIT CODE]: 0" in a.run_command("true")

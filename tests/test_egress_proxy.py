@@ -182,3 +182,19 @@ def test_plain_http_is_refused(tmp_path):
 def test_non_443_port_is_refused(tmp_path):
     response, events = run("CONNECT pypi.org:22 HTTP/1.1\r\n" + auth_header(["pypi.org"]) + "\r\n", tmp_path)
     assert b"403" in response and events[-1]["reason"] == "port 22 not allowed"
+
+
+# ------------------------------------------------------------------ proxy DNS
+
+
+def test_upstream_nameservers_skips_loopback_and_falls_through(tmp_path):
+    from src.egress.gateway import upstream_nameservers
+
+    stub = tmp_path / "stub.conf"          # systemd-resolved stub: loopback only
+    stub.write_text("nameserver 127.0.0.53\noptions edns0\n")
+    real = tmp_path / "real.conf"
+    real.write_text("# comment\nnameserver 10.0.0.2\nnameserver ::1\nnameserver 1.1.1.1\nsearch ec2.internal\n")
+
+    assert upstream_nameservers(candidates=[str(stub), str(real)]) == ["10.0.0.2", "1.1.1.1"]
+    assert upstream_nameservers(candidates=[str(tmp_path / "missing"), str(stub)]) == []
+    assert upstream_nameservers(override=" 9.9.9.9, 8.8.8.8 ", candidates=[str(real)]) == ["9.9.9.9", "8.8.8.8"]

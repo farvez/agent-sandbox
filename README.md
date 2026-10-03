@@ -151,11 +151,19 @@ tampering, secret hunting, kernel probing, path traversal, symlink escape, guess
 and the egress gateway (`pip install` allowed, other sites and the metadata service
 refused, then the session's egress log). Act 4 needs `pypi` in the tenant's egress policy.
 
-```bash
-python demo_live.py               # all acts; Act 2 needs OPENAI_API_KEY
+**Running it** (Windows PowerShell, from the repo root, after `terraform apply`):
+
+```powershell
+.venv\Scripts\activate
+. .\scripts\demo-env.ps1          # sets SANDBOX_API_URL / _KEY / _INSECURE from Terraform + SSM
+python demo_live.py               # all four acts; Act 2 uses OPENAI_API_KEY from .env
 python demo_live.py --skip-agent  # no OpenAI calls
-python demo_live.py --act 3       # red team only
+python demo_live.py --act 3       # one act only
 ```
+
+The leading `. ` matters: it keeps the variables in your window. Use `-Tenant acme` for
+another tenant. The firewall only admits `allowed_ingress_cidrs`; if your home IP
+changes, re-run `terraform apply` with the new one or requests will time out.
 
 Under gVisor a fork bomb is stopped by the 256 MB memory limit after roughly 10–20
 processes (the sandbox exits with code 2); the host and other sessions keep running.
@@ -178,18 +186,24 @@ sandbox (private network, no route out) ──► egress proxy ──► pypi.or
   `github`, `huggingface`.
 - **Per session:** `POST /v1/sessions {"egress": ["pypi"]}` must be covered by the policy
   (403 otherwise). Leave it empty and the session has no network at all.
-- **Isolation:** each such session gets its own `internal` Docker network whose only other
-  member is the proxy, so sessions can't reach each other and code that ignores the proxy
-  has no route out.
+- **Isolation:** each such session gets its own `internal` Docker network and its own
+  proxy container (same hardening as sandboxes, under gVisor on the server). Sessions
+  can't reach each other or share a proxy, and code that ignores the proxy has no route out.
+  Both of the proxy's networks are attached before it starts, because gVisor never sees
+  networks connected to a running container. For the same reason Docker's embedded DNS
+  (127.0.0.11) doesn't work under gVisor, so on Linux each proxy gets a `resolv.conf`
+  pointing at the host's upstream DNS (override with `SANDBOX_EGRESS_DNS`).
 - **Signed passes:** the session's proxy credentials are an HMAC-signed pass naming the
-  session, tenant, allowed hosts and expiry. The proxy is stateless and verifies the
-  signature; the signing key is new on every API start.
+  session, tenant, allowed hosts and expiry, signed with a key unique to that session's
+  proxy — a pass from one session is refused (407) by every other session's proxy.
 - **What the proxy enforces:** HTTPS tunnels (`CONNECT`) to port 443 only; host on the
   pass; DNS resolved by the proxy with private/reserved addresses refused, then connects
   to the vetted IP. TLS is not decrypted.
 - **Audit log:** one JSON line per connection (session, tenant, host, decision, reason,
-  bytes, duration) in `SANDBOX_EGRESS_LOG_DIR/egress.jsonl`; per session via
-  `GET /v1/sessions/{id}/egress`.
+  bytes, duration) in `SANDBOX_EGRESS_LOG_DIR/<session_id>.jsonl`, kept after the session
+  ends; per session via `GET /v1/sessions/{id}/egress`.
+- **Cost:** each internet-enabled session runs one extra small container (128 MB cap) and
+  takes about a second longer to create.
 - `pip install` works: packages go to `/workspace/.local` (persistent, on `sys.path`).
 
 ```python
@@ -225,7 +239,8 @@ session can only be used by the tenant that created it.
 | `SANDBOX_REQUIRE_GVISOR` | unset | `1` = fail session creation if `runsc` is missing |
 | `SANDBOX_EGRESS_POLICY` | — | JSON `{"tenant": ["pypi", "host"]}`; empty = no tenant gets internet |
 | `SANDBOX_EGRESS_POLICY_FILE` | — | Same, read from a file |
-| `SANDBOX_EGRESS_LOG_DIR` | system temp dir | Where the proxy writes `egress.jsonl` |
+| `SANDBOX_EGRESS_LOG_DIR` | system temp dir | Where proxies write `<session_id>.jsonl` |
+| `SANDBOX_EGRESS_DNS` | detected | Comma-separated DNS servers for the proxies (default: host's non-loopback nameservers) |
 
 Allowed templates: `sandbox-base:latest`, `python:3.11-slim`.
 
@@ -277,7 +292,7 @@ $(terraform output -raw fetch_api_keys_command)   # prints tenant:key pairs
 - The keys are also stored in Terraform state; keep state private.
 - Only `src/**/*.py`, `Dockerfile` and `requirements.txt` are uploaded — never `.env`.
 - **Egress:** `egress_policy` (default `{}`: no internet for anyone) is written to
-  `/etc/agent-sandbox/egress-policy.json`; the log is `/var/lib/agent-sandbox/egress/egress.jsonl`.
+  `/etc/agent-sandbox/egress-policy.json`; logs are in `/var/lib/agent-sandbox/egress/`.
   Docker's address pool is widened to `10.210.0.0/16` in /24s (256 concurrent egress sessions).
 
 ## Evaluation benchmarks
