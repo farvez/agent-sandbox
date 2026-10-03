@@ -123,6 +123,39 @@ uvicorn src.api.server:app --host 127.0.0.1 --port 8000
 python test_api.py        # end-to-end smoke test; reads SANDBOX_API_KEY and SANDBOX_API_URL
 ```
 
+### Python client
+
+`src/client` wraps the API in a class with the same `read_file` / `write_file` /
+`run_command` methods as the local workspace, so `AutonomousCodingAgent` works against a
+hosted sandbox unchanged:
+
+```python
+from src.client import RemoteSandbox
+
+with RemoteSandbox(base_url="https://<host>", api_key="<key>") as sbx:
+    sbx.write_file("main.py", "print(2 ** 16)")
+    print(sbx.run_command("python3 main.py"))
+```
+
+`SANDBOX_API_URL`, `SANDBOX_API_KEY` and `SANDBOX_API_INSECURE=1` (self-signed
+certificate) are read from the environment when the arguments are omitted.
+
+### Live demo
+
+`demo_live.py` runs three acts against a deployed server: hello world, an LLM agent fixing
+a failing test suite through the hosted sandbox, and a red-team table of 11 attacks
+(exfiltration, cloud-credential theft, memory and fork bombs, infinite loop, system
+tampering, secret hunting, kernel probing, path traversal, symlink escape, guessed key).
+
+```bash
+python demo_live.py               # all acts; Act 2 needs OPENAI_API_KEY
+python demo_live.py --skip-agent  # no OpenAI calls
+python demo_live.py --act 3       # red team only
+```
+
+Under gVisor a fork bomb is stopped by the 256 MB memory limit after roughly 10–20
+processes (the sandbox exits with code 2); the host and other sessions keep running.
+
 ### API reference
 
 All `/v1` routes require the `X-API-Key` header. Each key belongs to a tenant, and a

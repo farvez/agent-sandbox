@@ -1,0 +1,233 @@
+<title>Why agent-sandbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F3F5F2; --surface:#FFFFFF; --ink:#16201D; --muted:#5A6661; --line:#D4DAD5;
+  --accent:#0E7A6A; --accent-soft:#DCEFEA;
+  --good:#1F7A3A; --good-soft:#DFF1E4; --part:#8A6D00; --part-soft:#F6EFCC; --no:#B42318; --no-soft:#FBE4E1;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0E1412; --surface:#161E1B; --ink:#E3EAE6; --muted:#98A6A0; --line:#2A3531;
+    --accent:#4FC4AE; --accent-soft:#143530;
+    --good:#72D38F; --good-soft:#15301D; --part:#E3C75A; --part-soft:#33300F; --no:#FF8A7E; --no-soft:#3A1916;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0E1412; --surface:#161E1B; --ink:#E3EAE6; --muted:#98A6A0; --line:#2A3531;
+  --accent:#4FC4AE; --accent-soft:#143530;
+  --good:#72D38F; --good-soft:#15301D; --part:#E3C75A; --part-soft:#33300F; --no:#FF8A7E; --no-soft:#3A1916;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:15px/1.6 var(--body);margin:0}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:20px;padding-block:40px 72px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:clamp(2.1rem,5.5vw,3.2rem);font-weight:700;letter-spacing:-.02em}
+h2{font-size:1.6rem;font-weight:700;letter-spacing:-.01em}
+h3{font-size:1.05rem;font-weight:600;font-family:var(--body)}
+p{margin:0;max-width:70ch}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);padding:1px 5px;border-radius:3px}
+.eyebrow{font:500 .72rem/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+header{display:grid;gap:16px;padding-bottom:32px}
+.lede{font-size:1.12rem;color:var(--muted)}
+section{display:grid;gap:18px;padding-block:40px;border-top:1px solid var(--line)}
+.muted{color:var(--muted)}
+
+.thesis{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px;padding:16px 18px;font-size:1.05rem}
+.thesis strong{color:var(--accent)}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:grid;gap:6px;align-content:start}
+.card .who{font:500 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.card p,.card li{font-size:.92rem;color:var(--muted)}
+.card ul{margin:0;padding-left:18px;display:grid;gap:5px}
+.card strong{color:var(--ink);font-weight:600}
+
+.stats{display:flex;flex-wrap:wrap;gap:10px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px;display:grid;gap:2px;flex:1 1 150px}
+.stat b{font:700 1.5rem/1.1 var(--display);color:var(--accent);font-variant-numeric:tabular-nums}
+.stat span{font-size:.82rem;color:var(--muted)}
+
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:760px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+thead th{font:500 .72rem var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--ground)}
+tbody th{font-weight:600;white-space:nowrap}
+td.us{background:var(--accent-soft)}
+.chip{display:inline-block;font:500 .68rem var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:3px;margin-right:6px;vertical-align:1px}
+.y{background:var(--good-soft);color:var(--good)} .p{background:var(--part-soft);color:var(--part)} .n{background:var(--no-soft);color:var(--no)}
+
+.acts{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.acts li{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:grid;grid-template-columns:72px 1fr;gap:14px}
+.acts .t{font:700 1.4rem/1 var(--display);color:var(--accent)}
+.acts .t small{display:block;font:500 .68rem var(--mono);color:var(--muted);margin-top:6px;letter-spacing:.06em}
+.acts p{font-size:.93rem}
+.say{border-left:3px solid var(--line);padding-left:10px;color:var(--muted);font-style:italic;margin-top:6px}
+pre{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font:400 .84rem/1.5 var(--mono)}
+
+.gaps{display:grid;gap:8px}
+.gap{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px 14px;font-size:.92rem}
+.gap b{font-weight:600}
+.gap span{color:var(--muted)}
+.sources{font-size:.85rem;color:var(--muted);display:grid;gap:4px}
+.sources a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:560px){ .acts li{grid-template-columns:1fr} .gap{grid-template-columns:1fr} }
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">agent-sandbox · positioning and demo guide · October 2026</span>
+  <h1>Every serious agent now runs in a sandbox. Here's one you own.</h1>
+  <p class="lede">agent-sandbox is a self-hosted execution layer for AI agents. An agent sends code over an API, the code runs in a throwaway gVisor container with no network and hard limits, and the result comes back. It runs in your own AWS account, with any model.</p>
+  <div class="stats" aria-label="Measured on the live deployment">
+    <div class="stat"><b>11 / 11</b><span>attacks blocked or contained in the live red-team demo</span></div>
+    <div class="stat"><b>~1.1 s</b><span>round trip for one command, laptop → EC2 → back</span></div>
+    <div class="stat"><b>58</b><span>automated tests, incl. real-container security checks</span></div>
+    <div class="stat"><b>~$2 / day</b><span>one c7i-flex.large host; no per-session fee</span></div>
+  </div>
+</header>
+
+<section id="moment">
+  <span class="eyebrow">The moment</span>
+  <h2>The big labs just made sandboxes the default</h2>
+  <p>In the last two months, each major lab shipped an always-on agent, and every one of them works from an isolated computer of its own:</p>
+  <div class="grid4">
+    <div class="card"><span class="who">Meta · Sep 8</span><h3>Muse</h3><p>Personal agent that books, fills forms and buys. Runs inside <strong>Muse Secure VM</strong>; a separate <strong>Sentinel</strong> agent must approve anything it sends to the internet.</p></div>
+    <div class="card"><span class="who">OpenAI · Sep 29</span><h3>Dots</h3><p>Always-on agents in ChatGPT, each working from <strong>its own cloud computer</strong> you can open and watch.</p></div>
+    <div class="card"><span class="who">xAI · Aug 11 (beta)</span><h3>Grok Bot</h3><p>Teams of bots, each with <strong>its own computer</strong>, browser, files and memory, signing into your tools.</p></div>
+    <div class="card"><span class="who">Anthropic · Apr 8 (beta)</span><h3>Claude Managed Agents</h3><p>APIs for running Claude agents in a <strong>managed, sandboxed environment</strong>; $0.08 per session-hour plus tokens. Cowork runs remote sessions in per-session sandboxes.</p></div>
+  </div>
+  <p class="muted">"Ants" from Anthropic didn't turn up in any announcement; Claude Managed Agents is the closest Anthropic product, so it's compared here instead.</p>
+  <div class="thesis">These sandboxes are built for <strong>the labs' own agents</strong>. Muse's VM runs Muse; Dots' computers run Dots. A company building its <strong>own</strong> agent — on its own data, with the model it chooses, under its own compliance rules — still needs that same layer. That is the gap agent-sandbox fills.</div>
+</section>
+
+<section id="what">
+  <span class="eyebrow">What's built</span>
+  <h2>Four parts, all working on a live server</h2>
+  <div class="grid2">
+    <div class="card"><span class="who">Isolation</span><h3>A fresh container per command</h3><ul>
+      <li>gVisor user-space kernel (required on the server)</li>
+      <li>No network · 256 MB RAM, no swap · 1 CPU · 64 processes</li>
+      <li>No Linux capabilities · non-root · read-only system files</li>
+      <li>Per-command timeout; memory kills reported back</li></ul></div>
+    <div class="card"><span class="who">API</span><h3>Six endpoints, per-tenant keys</h3><ul>
+      <li>Create session · write · read · exec · delete · health</li>
+      <li>Each key belongs to a tenant; tenants can't see each other's sessions</li>
+      <li>Image allowlist; path and symlink escapes refused</li>
+      <li>Python client with the same interface as a local workspace</li></ul></div>
+    <div class="card"><span class="who">Agent + evals</span><h3>Proof that agents can use it</h3><ul>
+      <li>Tool-calling agent: read, write, run until tests pass</li>
+      <li>Model-agnostic in design; the demo uses gpt-4o-mini</li>
+      <li>Eval harness with hidden tests and an exfiltration task</li></ul></div>
+    <div class="card"><span class="who">Deployment</span><h3>One <code>terraform apply</code></h3><ul>
+      <li>EC2 in your account, HTTPS via Caddy, no SSH</li>
+      <li>Keys generated into SSM; IAM limited to two resources</li>
+      <li>Code shipped from a private S3 bundle; encrypted disk, IMDSv2</li></ul></div>
+  </div>
+</section>
+
+<section id="who">
+  <span class="eyebrow">Who it's for</span>
+  <h2>Builders of agents — not people using them</h2>
+  <div class="grid2">
+    <div class="card"><span class="who">Agent builders · startups, indie devs</span><h3>Run model-written code without risking your machine</h3><ul>
+      <li><strong>Any model.</strong> The sandbox doesn't care whether the code came from GPT, Claude, Llama or Qwen.</li>
+      <li><strong>Small surface.</strong> Six HTTP calls, or three methods on a client. Drop it in as the "run code" tool.</li>
+      <li><strong>Self-correcting loops.</strong> Stdout, stderr, exit code and memory-kill warnings go back to the model.</li>
+      <li><strong>Safety you can show.</strong> The red-team demo is a ready-made answer to "what if it runs <code>rm -rf</code> or phones home?"</li>
+      <li><strong>Flat cost.</strong> One small VM instead of per-session billing while you experiment.</li></ul></div>
+    <div class="card"><span class="who">Enterprises · platform and security teams</span><h3>The sandbox stays inside your perimeter</h3><ul>
+      <li><strong>Data residency.</strong> Code, files and outputs never leave your AWS account or region.</li>
+      <li><strong>Model choice.</strong> Use a private or on-prem model; no lab's agent platform required.</li>
+      <li><strong>Auditable.</strong> About 1,200 lines of Python and 450 of Terraform. Security can read all of it in an afternoon.</li>
+      <li><strong>Deny by default.</strong> No network inside sandboxes; no SSH on the host; least-privilege IAM; keys in SSM.</li>
+      <li><strong>Tenant separation.</strong> Teams or customers get separate keys and cannot touch each other's sessions.</li></ul></div>
+  </div>
+</section>
+
+<section id="compare">
+  <span class="eyebrow">Compared with the alternatives</span>
+  <h2>Where it wins, and where it doesn't (yet)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>agent-sandbox</th><th>E2B</th><th>Claude Managed Agents</th><th>Muse · Dots · Grok Bot</th></tr></thead>
+    <tbody>
+      <tr><th>What it is</th><td class="us">Self-hosted sandbox API</td><td>Sandbox platform (cloud, or self-host)</td><td>Managed agent runtime</td><td>Finished agents for end users</td></tr>
+      <tr><th>Runs where</th><td class="us"><span class="chip y">yes</span>Your AWS account</td><td>E2B cloud, or your cluster</td><td>Anthropic's infrastructure</td><td>The vendor's cloud</td></tr>
+      <tr><th>Model choice</th><td class="us"><span class="chip y">yes</span>Any</td><td><span class="chip y">yes</span>Any</td><td><span class="chip p">part</span>Claude</td><td><span class="chip n">no</span>Vendor's own</td></tr>
+      <tr><th>Can build on it</th><td class="us"><span class="chip y">yes</span>API + client</td><td><span class="chip y">yes</span>Python / JS SDKs</td><td><span class="chip y">yes</span>APIs</td><td><span class="chip n">no</span>Consumer products</td></tr>
+      <tr><th>Isolation</th><td class="us">gVisor containers</td><td>Firecracker microVMs</td><td>Managed sandbox</td><td>Per-agent VMs / computers</td></tr>
+      <tr><th>Host requirements</th><td class="us"><span class="chip y">yes</span>Any VM; no KVM needed</td><td>KVM-capable hosts for self-hosting</td><td>—</td><td>—</td></tr>
+      <tr><th>Long-running sessions</th><td class="us"><span class="chip n">no</span>Files persist, processes don't</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>with checkpoints</td><td><span class="chip y">yes</span>always-on</td></tr>
+      <tr><th>Internet from the sandbox</th><td class="us"><span class="chip p">part</span>Off, no allowlist yet</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>scoped credentials</td><td><span class="chip y">yes</span>Muse via Sentinel approval</td></tr>
+      <tr><th>Browser / computer use</th><td class="us"><span class="chip n">no</span></td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span></td></tr>
+      <tr><th>Tracing / audit log</th><td class="us"><span class="chip n">no</span>service logs only</td><td><span class="chip p">part</span></td><td><span class="chip y">yes</span>end-to-end tracing</td><td><span class="chip p">part</span>watch the agent's computer</td></tr>
+      <tr><th>Pricing model</th><td class="us">Your VM cost (~$2/day)</td><td>Usage-based</td><td>$0.08 / session-hour + tokens</td><td>Subscriptions (Muse free, $20, $100/mo)</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">Competitor details are from public announcements as of October 2026 and may be incomplete. E2B is open source and can be self-hosted too; the practical difference is footprint — agent-sandbox runs on one ordinary VM.</p>
+</section>
+
+<section id="gaps">
+  <span class="eyebrow">What's missing</span>
+  <h2>The honest list</h2>
+  <div class="gaps">
+    <div class="gap"><b>Long-running sessions</b><span>Each command gets a new container. Servers, background jobs and installed packages don't survive between calls; competitors keep a live machine per agent.</span></div>
+    <div class="gap"><b>Controlled internet access</b><span>It's all or nothing (nothing). Agents that need <code>pip install</code> or one API need an egress allowlist or an approval gate like Muse's Sentinel.</span></div>
+    <div class="gap"><b>Browser and computer use</b><span>No headless browser or desktop, which Dots, Grok Bot and Muse rely on.</span></div>
+    <div class="gap"><b>Packaged SDKs</b><span>A Python client exists in the repo; it isn't on PyPI, and there's no JavaScript SDK.</span></div>
+    <div class="gap"><b>Audit trail</b><span>No per-tenant record of which commands ran, when, and what they returned — the first thing an enterprise security review asks for.</span></div>
+    <div class="gap"><b>Scale and quotas</b><span>One host, in-memory sessions, no per-tenant caps or rate limits. Fine for a pilot, not for many customers.</span></div>
+    <div class="gap"><b>Snapshots and templates</b><span>Two allowed images; no way to save a prepared environment and start new sessions from it.</span></div>
+  </div>
+</section>
+
+<section id="next">
+  <span class="eyebrow">Where to take it</span>
+  <h2>The wedge: "Sentinel for everyone else"</h2>
+  <p>Meta built an approval gate for Muse's internet access because exfiltration is the risk that worries people most. Companies building their own agents want the same control, with logs they own. Three features would turn this from a solid sandbox into that product:</p>
+  <div class="grid4">
+    <div class="card"><h3>Egress gateway</h3><p>Per-tenant allowlist (PyPI, one API) with every outbound request logged, and optional human approval.</p></div>
+    <div class="card"><h3>Audit log</h3><p>Every command, file write and network request per tenant, exportable for compliance.</p></div>
+    <div class="card"><h3>Persistent sessions</h3><p>A container that lives for the session, so agents can install packages and run servers.</p></div>
+    <div class="card"><h3>SDK on PyPI</h3><p><code>pip install</code>, plus drop-in tool definitions for OpenAI, Anthropic and open-model agent frameworks.</p></div>
+  </div>
+</section>
+
+<section id="demo">
+  <span class="eyebrow">Demo script · about 4 minutes</span>
+  <h2>How to show it</h2>
+  <p>Set the connection once (keys from <code>terraform output -raw fetch_api_keys_command</code>), then run the demo. In PowerShell:</p>
+  <pre>$env:SANDBOX_API_URL = "https://&lt;server-ip&gt;"
+$env:SANDBOX_API_KEY = "&lt;key&gt;"
+$env:SANDBOX_API_INSECURE = "1"     # only without a domain (self-signed certificate)
+python demo_live.py                  # or --skip-agent to avoid OpenAI calls</pre>
+  <ol class="acts">
+    <li><div class="t">Act 1<small>~30 s</small></div><div><h3>Hello sandbox</h3><p>Creates a session, writes a Python file, runs it on the server and prints the output and round-trip time.</p><p class="say">"This code didn't run on my laptop. It ran in a throwaway container on our server, as a non-root user, and the container is already gone."</p></div></li>
+    <li><div class="t">Act 2<small>~90 s</small></div><div><h3>Agent at work</h3><p>Plants three bugs in a Fibonacci function. The agent reads the files, rewrites the function, runs the tests, and stops when they pass. The demo re-runs the tests itself instead of trusting the agent's word.</p><p class="say">"The model only decides what to do. Every file it touched and every command it ran happened inside the sandbox. Swap in Claude or Llama and nothing else changes."</p></div></li>
+    <li><div class="t">Act 3<small>~90 s</small></div><div><h3>Red team</h3><p>Runs 11 real attacks: exfiltration, stealing the server's AWS credentials, memory and fork bombs, an infinite loop, tampering with system files, hunting for secrets, probing the kernel, path traversal, a symlink escape, and a guessed key. Each row names the control that stopped it.</p><p class="say">"This is the question every security team asks: what happens when the model does something stupid, or someone tricks it into something malicious? Here's the answer, run live."</p></div></li>
+  </ol>
+  <p class="muted">If asked about the fork bomb: under gVisor the 256 MB memory limit ends the sandbox after roughly 10–20 processes; the server and other sessions keep running.</p>
+</section>
+
+<section id="sources">
+  <span class="eyebrow">Sources</span>
+  <div class="sources">
+    <a href="https://www.techrepublic.com/article/news-meta-muse-ai-agent-us-launch/">TechRepublic — Meta launches Muse AI agent</a>
+    <a href="https://www.pbs.org/newshour/nation/meta-launches-personal-ai-agent-muse-to-help-with-everyday-tasks">PBS — Meta launches personal AI agent Muse</a>
+    <a href="https://siliconangle.com/2026/09/29/openai-launches-dots-always-on-ai-agents-in-chatgpt-with-their-own-cloud-computers/">SiliconANGLE — OpenAI launches Dots</a>
+    <a href="https://thenextweb.com/news/openai-dots-always-on-ai-agents-cloud-computers-devday">The Next Web — OpenAI Dots at DevDay</a>
+    <a href="https://www.reworked.co/collaboration-productivity/xai-launches-grok-bot-ai-agents-in-beta/">Reworked — xAI launches Grok Bot in beta</a>
+    <a href="https://tech-insider.org/?p=21070">Tech Insider — Claude Managed Agents setup and pricing</a>
+  </div>
+</section>
+</div>
