@@ -16,9 +16,10 @@ class FakeWorkspace:
 
     exec_delay = 0.0
 
-    def __init__(self, base_image: str = "sandbox-base:latest"):
+    def __init__(self, base_image="sandbox-base:latest", egress=None, session_id=None, tenant_id="local"):
         self._ws = make_offline_workspace()
         self.workspace_dir = self._ws.workspace_dir
+        self.egress = egress or []
         self.cleaned = False
 
     def write_file(self, path, content):
@@ -30,6 +31,9 @@ class FakeWorkspace:
     def run_command(self, command, timeout_seconds=15):
         time.sleep(self.exec_delay)
         return f"[STDOUT]:\nran {command}\n[EXIT CODE]: 0"
+
+    def egress_events(self, limit=200):
+        return [{"decision": "allow", "host": "pypi.org"}] if self.egress else []
 
     def cleanup(self):
         self.cleaned = True
@@ -160,3 +164,59 @@ def test_slow_exec_does_not_block_other_requests(client):
     worker.join()
 
     assert elapsed < 1.0, f"/healthz waited {elapsed:.2f}s behind a running exec"
+
+
+# ---------------------------------------------------------------- egress
+
+
+def test_session_without_egress_has_no_network(client):
+    res = client.post("/v1/sessions", json={}, headers=AUTH)
+    assert res.json()["egress"] == []
+    assert server.active_sessions[res.json()["session_id"]].workspace.egress == []
+
+
+def test_allowed_egress_preset_is_expanded(client):
+    res = client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=AUTH)
+    assert res.status_code == 201
+    assert res.json()["egress"] == ["pypi.org", "files.pythonhosted.org"]
+
+
+def test_egress_outside_tenant_policy_is_refused(client):
+    res = client.post("/v1/sessions", json={"egress": ["pypi", "evil.com"]}, headers=AUTH)
+    assert res.status_code == 403
+    assert "evil.com" in res.json()["detail"]
+
+
+def test_tenant_without_policy_gets_no_egress(client):
+    res = client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=OTHER_TENANT)
+    assert res.status_code == 403
+
+
+@pytest.mark.parametrize("rule, status_code", [("api.example.com", 201), ("*.example.com", 201), ("example.com", 403), ("*.com", 403)])
+def test_wildcard_policy(client, rule, status_code):
+    res = client.post("/v1/sessions", json={"egress": [rule]}, headers={"X-API-Key": TENANT_KEYS["default"]})
+    assert res.status_code == status_code
+
+
+def test_policy_endpoint_shows_own_tenant_only(client):
+    assert client.get("/v1/egress/policy", headers=AUTH).json()["allowed"] == [
+        "pypi.org", "files.pythonhosted.org", "api.openai.com"
+    ]
+    assert client.get("/v1/egress/policy", headers=OTHER_TENANT).json()["allowed"] == []
+
+
+def test_egress_log_endpoint_is_tenant_scoped(client):
+    sid = client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=AUTH).json()["session_id"]
+    assert client.get(f"/v1/sessions/{sid}/egress", headers=AUTH).json()["events"][0]["host"] == "pypi.org"
+    assert client.get(f"/v1/sessions/{sid}/egress", headers=OTHER_TENANT).status_code == 403
+
+
+@pytest.mark.parametrize("raw", ['["pypi"]', '{"a": "pypi"}', '{"a": [1]}', "not json"])
+def test_load_egress_policy_rejects_bad_config(raw):
+    with pytest.raises((RuntimeError, ValueError)):
+        server.load_egress_policy(raw, None)
+
+
+def test_load_egress_policy_empty_means_no_internet():
+    assert server.load_egress_policy(None, None) == {}
+    assert server.load_egress_policy("  ", None) == {}

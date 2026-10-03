@@ -13,6 +13,7 @@ APP_BUNDLE="${app_bundle_s3}"
 API_KEY_PARAM="${api_key_param}"
 DOMAIN="${domain_name}"
 SESSION_TTL="${session_ttl_secs}"
+EGRESS_LOG_DIR=/var/lib/agent-sandbox/egress
 APP_DIR=/opt/agent-sandbox
 ARCH=$(uname -m)
 
@@ -43,6 +44,17 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gviso
 apt-get update -y
 apt-get install -y runsc
 runsc install   # adds the runsc runtime to /etc/docker/daemon.json
+# Each internet-enabled session gets its own Docker network; Docker's default
+# pools allow only ~30. 10.210.0.0/16 in /24s allows 256.
+python3 - <<'PY'
+import json
+path = "/etc/docker/daemon.json"
+with open(path) as f:
+    cfg = json.load(f)
+cfg["default-address-pools"] = [{"base": "10.210.0.0/16", "size": 24}]
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PY
 systemctl restart docker
 docker info --format '{{json .Runtimes}}' | grep -q runsc   # fail provisioning if not registered
 
@@ -64,6 +76,14 @@ python3 -m venv "$APP_DIR/.venv"
 id -u sandbox >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin sandbox
 usermod -aG docker sandbox
 install -d -o sandbox -g sandbox -m 0700 /var/lib/agent-sandbox/workspaces
+install -d -o sandbox -g sandbox -m 0700 "$EGRESS_LOG_DIR"
+
+# Per-tenant egress policy (Terraform var.egress_policy). Tenants not listed get no internet.
+install -d -m 0755 /etc/agent-sandbox
+cat > /etc/agent-sandbox/egress-policy.json <<'POLICY'
+${egress_policy_json}
+POLICY
+chmod 0644 /etc/agent-sandbox/egress-policy.json
 
 # Launcher fetches the tenant keys from SSM on every start, so they never sit on
 # disk; rotating or adding keys only needs a parameter update plus a restart.
@@ -92,6 +112,8 @@ Environment=PYTHONPATH=$APP_DIR
 Environment=SANDBOX_REQUIRE_GVISOR=1
 Environment=SANDBOX_SESSION_TTL=$SESSION_TTL
 Environment=TMPDIR=/var/lib/agent-sandbox/workspaces
+Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
+Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
 ExecStart=$APP_DIR/start.sh
 Restart=always
 RestartSec=5

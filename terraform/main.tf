@@ -244,11 +244,12 @@ resource "aws_instance" "sandbox_host" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    aws_region       = var.aws_region
-    app_bundle_s3    = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
-    api_key_param    = aws_ssm_parameter.api_keys.name
-    domain_name      = var.domain_name
-    session_ttl_secs = var.session_ttl_seconds
+    aws_region         = var.aws_region
+    app_bundle_s3      = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
+    api_key_param      = aws_ssm_parameter.api_keys.name
+    domain_name        = var.domain_name
+    session_ttl_secs   = var.session_ttl_seconds
+    egress_policy_json = jsonencode(var.egress_policy)
   })
 
   # A new code bundle produces new user_data, which replaces the host.

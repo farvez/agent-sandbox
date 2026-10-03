@@ -9,6 +9,8 @@ import pytest
 TENANT_KEYS = {"acme": "acme-test-key", "globex": "globex-test-key", "default": "default-test-key"}
 os.environ["SANDBOX_API_KEYS"] = "acme:acme-test-key,globex:globex-test-key"
 os.environ["SANDBOX_API_KEY"] = TENANT_KEYS["default"]
+# acme may use PyPI and one API; globex has no internet; default may use anything under example.com.
+os.environ["SANDBOX_EGRESS_POLICY"] = '{"acme": ["pypi", "api.openai.com"], "default": ["*.example.com"]}'
 
 from src.step5_agent.sandbox import SandboxedWorkspace
 
@@ -23,6 +25,12 @@ def make_offline_workspace() -> SandboxedWorkspace:
     ws.client = None
     ws.has_gvisor = False
     ws.container_user = None
+    ws.session_id = "local_offline"
+    ws.tenant_id = "local"
+    ws.egress_rules = []
+    ws.gateway = None
+    ws.egress_network = None
+    ws.proxy_url = None
     ws.workspace_dir = os.path.realpath(tempfile.mkdtemp(prefix="agent_workspace_test_"))
     return ws
 

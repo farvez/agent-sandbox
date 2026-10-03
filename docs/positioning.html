@@ -92,7 +92,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <div class="stats" aria-label="Measured on the live deployment">
     <div class="stat"><b>11 / 11</b><span>attacks blocked or contained in the live red-team demo</span></div>
     <div class="stat"><b>~1.1 s</b><span>round trip for one command, laptop → EC2 → back</span></div>
-    <div class="stat"><b>58</b><span>automated tests, incl. real-container security checks</span></div>
+    <div class="stat"><b>118</b><span>automated tests, incl. real-container security and egress checks</span></div>
     <div class="stat"><b>~$2 / day</b><span>one c7i-flex.large host; no per-session fee</span></div>
   </div>
 </header>
@@ -117,7 +117,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <div class="grid2">
     <div class="card"><span class="who">Isolation</span><h3>A fresh container per command</h3><ul>
       <li>gVisor user-space kernel (required on the server)</li>
-      <li>No network · 256 MB RAM, no swap · 1 CPU · 64 processes</li>
+      <li>No network by default · 256 MB RAM, no swap · 1 CPU · 64 processes</li>
       <li>No Linux capabilities · non-root · read-only system files</li>
       <li>Per-command timeout; memory kills reported back</li></ul></div>
     <div class="card"><span class="who">API</span><h3>Six endpoints, per-tenant keys</h3><ul>
@@ -125,6 +125,11 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <li>Each key belongs to a tenant; tenants can't see each other's sessions</li>
       <li>Image allowlist; path and symlink escapes refused</li>
       <li>Python client with the same interface as a local workspace</li></ul></div>
+    <div class="card"><span class="who">Egress gateway</span><h3>Internet only where approved</h3><ul>
+      <li>Per-tenant allowlist; sessions opt in, e.g. <code>egress=["pypi"]</code></li>
+      <li>Each session on its own private network; the proxy is the only way out</li>
+      <li>HTTPS to port 443 only; private and cloud-metadata addresses refused</li>
+      <li>Every connection logged: session, host, decision, bytes</li></ul></div>
     <div class="card"><span class="who">Agent + evals</span><h3>Proof that agents can use it</h3><ul>
       <li>Tool-calling agent: read, write, run until tests pass</li>
       <li>Model-agnostic in design; the demo uses gpt-4o-mini</li>
@@ -150,7 +155,8 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <li><strong>Data residency.</strong> Code, files and outputs never leave your AWS account or region.</li>
       <li><strong>Model choice.</strong> Use a private or on-prem model; no lab's agent platform required.</li>
       <li><strong>Auditable.</strong> About 1,200 lines of Python and 450 of Terraform. Security can read all of it in an afternoon.</li>
-      <li><strong>Deny by default.</strong> No network inside sandboxes; no SSH on the host; least-privilege IAM; keys in SSM.</li>
+      <li><strong>Deny by default.</strong> No network unless a tenant policy allows a host; no SSH on the host; least-privilege IAM; keys in SSM.</li>
+      <li><strong>Egress audit trail.</strong> Every outbound connection a sandbox attempts — allowed or refused — is logged per tenant and session.</li>
       <li><strong>Tenant separation.</strong> Teams or customers get separate keys and cannot touch each other's sessions.</li></ul></div>
   </div>
 </section>
@@ -168,9 +174,9 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <tr><th>Isolation</th><td class="us">gVisor containers</td><td>Firecracker microVMs</td><td>Managed sandbox</td><td>Per-agent VMs / computers</td></tr>
       <tr><th>Host requirements</th><td class="us"><span class="chip y">yes</span>Any VM; no KVM needed</td><td>KVM-capable hosts for self-hosting</td><td>—</td><td>—</td></tr>
       <tr><th>Long-running sessions</th><td class="us"><span class="chip n">no</span>Files persist, processes don't</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>with checkpoints</td><td><span class="chip y">yes</span>always-on</td></tr>
-      <tr><th>Internet from the sandbox</th><td class="us"><span class="chip p">part</span>Off, no allowlist yet</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>scoped credentials</td><td><span class="chip y">yes</span>Muse via Sentinel approval</td></tr>
+      <tr><th>Internet from the sandbox</th><td class="us"><span class="chip y">yes</span>Per-tenant allowlist via egress gateway</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>scoped credentials</td><td><span class="chip y">yes</span>Muse via Sentinel approval</td></tr>
       <tr><th>Browser / computer use</th><td class="us"><span class="chip n">no</span></td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span></td></tr>
-      <tr><th>Tracing / audit log</th><td class="us"><span class="chip n">no</span>service logs only</td><td><span class="chip p">part</span></td><td><span class="chip y">yes</span>end-to-end tracing</td><td><span class="chip p">part</span>watch the agent's computer</td></tr>
+      <tr><th>Tracing / audit log</th><td class="us"><span class="chip p">part</span>egress log per connection; no command log yet</td><td><span class="chip p">part</span></td><td><span class="chip y">yes</span>end-to-end tracing</td><td><span class="chip p">part</span>watch the agent's computer</td></tr>
       <tr><th>Pricing model</th><td class="us">Your VM cost (~$2/day)</td><td>Usage-based</td><td>$0.08 / session-hour + tokens</td><td>Subscriptions (Muse free, $20, $100/mo)</td></tr>
     </tbody>
   </table></div>
@@ -182,10 +188,10 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <h2>The honest list</h2>
   <div class="gaps">
     <div class="gap"><b>Long-running sessions</b><span>Each command gets a new container. Servers, background jobs and installed packages don't survive between calls; competitors keep a live machine per agent.</span></div>
-    <div class="gap"><b>Controlled internet access</b><span>It's all or nothing (nothing). Agents that need <code>pip install</code> or one API need an egress allowlist or an approval gate like Muse's Sentinel.</span></div>
+    <div class="gap"><b>Human approval for new hosts</b><span>The egress allowlist is set by policy; there's no "ask a person" step like Muse's Sentinel for hosts outside it yet.</span></div>
     <div class="gap"><b>Browser and computer use</b><span>No headless browser or desktop, which Dots, Grok Bot and Muse rely on.</span></div>
     <div class="gap"><b>Packaged SDKs</b><span>A Python client exists in the repo; it isn't on PyPI, and there's no JavaScript SDK.</span></div>
-    <div class="gap"><b>Audit trail</b><span>No per-tenant record of which commands ran, when, and what they returned — the first thing an enterprise security review asks for.</span></div>
+    <div class="gap"><b>Command audit trail</b><span>Outbound connections are logged, but not which commands ran and what they returned — the next thing an enterprise security review asks for.</span></div>
     <div class="gap"><b>Scale and quotas</b><span>One host, in-memory sessions, no per-tenant caps or rate limits. Fine for a pilot, not for many customers.</span></div>
     <div class="gap"><b>Snapshots and templates</b><span>Two allowed images; no way to save a prepared environment and start new sessions from it.</span></div>
   </div>
@@ -194,17 +200,17 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 <section id="next">
   <span class="eyebrow">Where to take it</span>
   <h2>The wedge: "Sentinel for everyone else"</h2>
-  <p>Meta built an approval gate for Muse's internet access because exfiltration is the risk that worries people most. Companies building their own agents want the same control, with logs they own. Three features would turn this from a solid sandbox into that product:</p>
+  <p>Meta built an approval gate for Muse's internet access because exfiltration is the risk that worries people most. Companies building their own agents want the same control, with logs they own. The egress gateway is now built; the rest of the list turns it into that product:</p>
   <div class="grid4">
-    <div class="card"><h3>Egress gateway</h3><p>Per-tenant allowlist (PyPI, one API) with every outbound request logged, and optional human approval.</p></div>
-    <div class="card"><h3>Audit log</h3><p>Every command, file write and network request per tenant, exportable for compliance.</p></div>
+    <div class="card"><span class="who">Built</span><h3>Egress gateway</h3><p>Per-tenant allowlist with every outbound connection logged. Next: human approval for hosts outside the list.</p></div>
+    <div class="card"><h3>Command audit log</h3><p>Every command and file write per tenant alongside the egress log, exportable for compliance.</p></div>
     <div class="card"><h3>Persistent sessions</h3><p>A container that lives for the session, so agents can install packages and run servers.</p></div>
     <div class="card"><h3>SDK on PyPI</h3><p><code>pip install</code>, plus drop-in tool definitions for OpenAI, Anthropic and open-model agent frameworks.</p></div>
   </div>
 </section>
 
 <section id="demo">
-  <span class="eyebrow">Demo script · about 4 minutes</span>
+  <span class="eyebrow">Demo script · about 5 minutes</span>
   <h2>How to show it</h2>
   <p>Set the connection once (keys from <code>terraform output -raw fetch_api_keys_command</code>), then run the demo. In PowerShell:</p>
   <pre>$env:SANDBOX_API_URL = "https://&lt;server-ip&gt;"
@@ -215,7 +221,9 @@ python demo_live.py                  # or --skip-agent to avoid OpenAI calls</pr
     <li><div class="t">Act 1<small>~30 s</small></div><div><h3>Hello sandbox</h3><p>Creates a session, writes a Python file, runs it on the server and prints the output and round-trip time.</p><p class="say">"This code didn't run on my laptop. It ran in a throwaway container on our server, as a non-root user, and the container is already gone."</p></div></li>
     <li><div class="t">Act 2<small>~90 s</small></div><div><h3>Agent at work</h3><p>Plants three bugs in a Fibonacci function. The agent reads the files, rewrites the function, runs the tests, and stops when they pass. The demo re-runs the tests itself instead of trusting the agent's word.</p><p class="say">"The model only decides what to do. Every file it touched and every command it ran happened inside the sandbox. Swap in Claude or Llama and nothing else changes."</p></div></li>
     <li><div class="t">Act 3<small>~90 s</small></div><div><h3>Red team</h3><p>Runs 11 real attacks: exfiltration, stealing the server's AWS credentials, memory and fork bombs, an infinite loop, tampering with system files, hunting for secrets, probing the kernel, path traversal, a symlink escape, and a guessed key. Each row names the control that stopped it.</p><p class="say">"This is the question every security team asks: what happens when the model does something stupid, or someone tricks it into something malicious? Here's the answer, run live."</p></div></li>
+    <li><div class="t">Act 4<small>~60 s</small></div><div><h3>Egress gateway</h3><p>A session allowed only PyPI installs <code>requests</code>, then fails to reach example.com, fails to reach the cloud metadata service, and finds no route when it bypasses the proxy. Ends on the session's egress log.</p><p class="say">"Agents need packages, so we don't pretend they can live offline. They get exactly the sites your policy allows, and you get a record of every connection they tried."</p></div></li>
   </ol>
+  <p class="muted">Act 4 needs <code>pypi</code> in the tenant's egress policy (Terraform: <code>-var 'egress_policy={default=["pypi"]}'</code>).</p>
   <p class="muted">If asked about the fork bomb: under gVisor the 256 MB memory limit ends the sandbox after roughly 10–20 processes; the server and other sessions keep running.</p>
 </section>
 

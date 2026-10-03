@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import uuid
 import asyncio
@@ -12,6 +13,8 @@ from fastapi import FastAPI, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
+from src.egress.gateway import shutdown_gateway
+from src.egress.proxy import expand_rules, rule_covered
 from src.step5_agent.sandbox import SandboxedWorkspace
 
 
@@ -44,6 +47,28 @@ def load_api_keys(multi: Optional[str], single: Optional[str]) -> List[Tuple[byt
 
 API_KEYS = load_api_keys(os.getenv("SANDBOX_API_KEYS"), os.getenv("SANDBOX_API_KEY"))
 
+
+def load_egress_policy(raw: Optional[str], path: Optional[str]) -> Dict[str, List[str]]:
+    """Which hosts each tenant's sessions may reach, as {"tenant": ["pypi", "api.example.com"]}.
+
+    From SANDBOX_EGRESS_POLICY (JSON) or the JSON file at SANDBOX_EGRESS_POLICY_FILE.
+    Tenants not listed get no internet access at all.
+    """
+    if path and not raw:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+    if not raw or not raw.strip():
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict) or not all(
+        isinstance(v, list) and all(isinstance(h, str) for h in v) for v in data.values()
+    ):
+        raise RuntimeError('Egress policy must be a JSON object like {"tenant": ["pypi", "api.example.com"]}.')
+    return {tenant: expand_rules(hosts) for tenant, hosts in data.items()}
+
+
+EGRESS_POLICY = load_egress_policy(os.getenv("SANDBOX_EGRESS_POLICY"), os.getenv("SANDBOX_EGRESS_POLICY_FILE"))
+
 SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))
 ALLOWED_TEMPLATES: Set[str] = {
     "sandbox-base:latest",
@@ -60,11 +85,17 @@ sessions_lock = threading.Lock()
 class CreateSessionRequest(BaseModel):
     template: str = Field(default="sandbox-base:latest", description="Base docker image tag")
     metadata: Optional[Dict[str, str]] = None
+    egress: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description='Hosts or presets this session may reach over HTTPS, e.g. ["pypi"]. Empty = no network.',
+    )
 
 
 class CreateSessionResponse(BaseModel):
     session_id: str
     tenant_id: str
+    egress: List[str]
     created_at: float
     status: str
 
@@ -137,6 +168,7 @@ async def lifespan(app: FastAPI):
         active_sessions.clear()
     for rec in remaining:
         rec.workspace.cleanup()
+    shutdown_gateway()
 
 
 app = FastAPI(
@@ -192,8 +224,19 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
             detail=f"Template '{request.template}' not permitted. Allowed: {list(ALLOWED_TEMPLATES)}"
         )
 
+    egress = expand_rules(request.egress)
+    allowed = EGRESS_POLICY.get(tenant_id, [])
+    refused = [rule for rule in egress if not rule_covered(rule, allowed)]
+    if refused:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Egress not permitted for this tenant: {refused}. Allowed: {allowed}",
+        )
+
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
-    workspace = SandboxedWorkspace(base_image=request.template)
+    workspace = SandboxedWorkspace(
+        base_image=request.template, egress=egress, session_id=session_id, tenant_id=tenant_id
+    )
 
     with sessions_lock:
         active_sessions[session_id] = SessionRecord(
@@ -203,8 +246,21 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
         )
 
     return CreateSessionResponse(
-        session_id=session_id, tenant_id=tenant_id, created_at=time.time(), status="ready"
+        session_id=session_id, tenant_id=tenant_id, egress=egress, created_at=time.time(), status="ready"
     )
+
+
+@app.get("/v1/egress/policy")
+def egress_policy(tenant_id: str = Security(verify_api_key)):
+    """The hosts this tenant's sessions may request."""
+    return {"tenant_id": tenant_id, "allowed": EGRESS_POLICY.get(tenant_id, [])}
+
+
+@app.get("/v1/sessions/{session_id}/egress")
+def egress_log(session_id: str, limit: int = 200, tenant_id: str = Security(verify_api_key)):
+    """Every outbound connection this session attempted, allowed or denied."""
+    rec = get_authorized_session(session_id, tenant_id)
+    return {"session_id": session_id, "events": rec.workspace.egress_events(limit=max(1, min(limit, 1000)))}
 
 
 @app.post("/v1/sessions/{session_id}/write")

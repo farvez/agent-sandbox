@@ -3,6 +3,7 @@
   Act 1  Hello sandbox      create a session, write code, run it remotely
   Act 2  Agent at work      an LLM agent fixes a failing test suite on the hosted sandbox
   Act 3  Red team           real attacks against the sandbox, and what stopped each one
+  Act 4  Egress gateway     pip install through the allowlist; everything else refused and logged
 
 Needs SANDBOX_API_URL and SANDBOX_API_KEY (plus SANDBOX_API_INSECURE=1 for a
 self-signed certificate). Act 2 also needs OPENAI_API_KEY; skip it with --skip-agent.
@@ -10,6 +11,8 @@ self-signed certificate). Act 2 also needs OPENAI_API_KEY; skip it with --skip-a
     python demo_live.py
     python demo_live.py --skip-agent
     python demo_live.py --act 3
+
+Act 4 needs the tenant's egress policy to include "pypi".
 """
 import argparse
 import os
@@ -201,9 +204,48 @@ def act_red_team() -> None:
     console.print(Panel(f"[bold]{blocked}/{total} attacks blocked[/bold]", border_style=style))
 
 
+# ---------------------------------------------------------------- Act 4
+
+def act_egress() -> None:
+    act_header(4, "Egress gateway", "Internet access only to approved sites, with every connection logged")
+    probe = RemoteSandbox()
+    probe.start()
+    try:
+        policy = probe.egress_policy()
+    finally:
+        probe.close()
+    if "pypi.org" not in policy:
+        console.print(f"[yellow]This tenant may reach {policy or 'nothing'}; Act 4 needs 'pypi' in its egress policy "
+                      "(Terraform: -var 'egress_policy={default=[\"pypi\"]}').[/yellow]")
+        return
+
+    with RemoteSandbox(egress=["pypi"]) as sbx:
+        console.print(f"Session [cyan]{sbx.session_id}[/cyan] may reach: [cyan]{', '.join(sbx.egress)}[/cyan]")
+        steps = [
+            ("pip install from PyPI", "pip install --quiet requests==2.32.3 && python3 -c 'import requests; print(\"requests\", requests.__version__)'", 60),
+            ("a site not on the list", "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\" 2>&1 | tail -1", 15),
+            ("the cloud metadata service", "python3 -c \"import urllib.request; urllib.request.urlopen('https://169.254.169.254/latest/meta-data/', timeout=5)\" 2>&1 | tail -1", 15),
+            ("going around the proxy", "python3 -c \"import socket; socket.create_connection(('1.1.1.1', 443), timeout=5)\" 2>&1 | tail -1", 15),
+        ]
+        for label, command, timeout in steps:
+            with console.status(f"{label}…"):
+                out = sbx.run_command(command, timeout_seconds=timeout)
+            console.print(Panel(out, title=label, border_style="green" if label.startswith("pip") else "yellow"))
+
+        table = Table(title="Egress log for this session", header_style="bold")
+        for column in ("Decision", "Host", "Reason", "Bytes in"):
+            table.add_column(column)
+        for e in sbx.egress_log():
+            allowed = e["decision"] == "allow"
+            table.add_row("[green]allow[/green]" if allowed else "[red]deny[/red]",
+                          e.get("host") or e.get("target", ""), e.get("reason", ""),
+                          f"{e.get('bytes_down', 0):,}" if allowed else "")
+        console.print(table)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--act", type=int, choices=[1, 2, 3], help="run a single act")
+    parser.add_argument("--act", type=int, choices=[1, 2, 3, 4], help="run a single act")
     parser.add_argument("--skip-agent", action="store_true", help="skip Act 2 (no OpenAI calls)")
     args = parser.parse_args()
 
@@ -214,8 +256,8 @@ def main() -> None:
 
     console.print(Panel("[bold white]AGENT-SANDBOX · LIVE DEMO[/bold white]\n"
                         "[dim]Hosted, isolated code execution for AI agents[/dim]", border_style="cyan"))
-    acts = {1: act_hello, 2: act_agent, 3: act_red_team}
-    for number in ([args.act] if args.act else [1, 2, 3]):
+    acts = {1: act_hello, 2: act_agent, 3: act_red_team, 4: act_egress}
+    for number in ([args.act] if args.act else [1, 2, 3, 4]):
         if number == 2 and args.skip_agent:
             continue
         acts[number]()
