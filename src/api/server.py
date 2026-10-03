@@ -2,7 +2,10 @@ import os
 import time
 import uuid
 import asyncio
-from typing import Dict, Optional
+import secrets
+import threading
+import logging
+from typing import Dict, List, Optional, Set, Tuple
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Security, status
@@ -11,13 +14,49 @@ from pydantic import BaseModel, Field
 
 from src.step5_agent.sandbox import SandboxedWorkspace
 
-# Configuration
-API_KEY_ENV = os.getenv("SANDBOX_API_KEY", "sb_live_secret_key_123")
-SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))  # 30 min default
+
+
+def load_api_keys(multi: Optional[str], single: Optional[str]) -> List[Tuple[bytes, str]]:
+    """Builds the (key, tenant_id) table from the environment.
+
+    SANDBOX_API_KEYS="acme:<key>,globex:<key>" gives each tenant its own key;
+    SANDBOX_API_KEY=<key> is a shorthand for a single tenant named "default".
+    """
+    pairs: List[Tuple[str, str]] = []
+    for entry in (multi or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        tenant, sep, key = entry.partition(":")
+        if not sep or not tenant.strip() or not key.strip():
+            raise RuntimeError("SANDBOX_API_KEYS entries must look like 'tenant:key'.")
+        pairs.append((tenant.strip(), key.strip()))
+    if single:
+        pairs.append(("default", single))
+
+    if not pairs:
+        raise RuntimeError("No API keys configured. Set SANDBOX_API_KEYS or SANDBOX_API_KEY.")
+    keys = [key for _, key in pairs]
+    if len(set(keys)) != len(keys):
+        raise RuntimeError("The same API key is assigned to more than one tenant.")
+    return [(key.encode(), tenant) for tenant, key in pairs]
+
+
+API_KEYS = load_api_keys(os.getenv("SANDBOX_API_KEYS"), os.getenv("SANDBOX_API_KEY"))
+
+SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))
+ALLOWED_TEMPLATES: Set[str] = {
+    "sandbox-base:latest",
+    "python:3.11-slim",
+}
+
+logger = logging.getLogger("agent_sandbox.api")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+# Endpoints are sync (run in FastAPI's thread pool) so blocking Docker calls
+# never stall the event loop; guard the registry with a thread lock.
+sessions_lock = threading.Lock()
 
 
-# Request / Response Schemas
 class CreateSessionRequest(BaseModel):
     template: str = Field(default="sandbox-base:latest", description="Base docker image tag")
     metadata: Optional[Dict[str, str]] = None
@@ -25,6 +64,7 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: str
+    tenant_id: str
     created_at: float
     status: str
 
@@ -49,11 +89,11 @@ class RunCommandResponse(BaseModel):
     output: str
 
 
-# In-Memory Session Registry
 class SessionRecord:
-    def __init__(self, session_id: str, workspace: SandboxedWorkspace):
+    def __init__(self, session_id: str, workspace: SandboxedWorkspace, tenant_id: str):
         self.session_id = session_id
         self.workspace = workspace
+        self.tenant_id = tenant_id
         self.created_at = time.time()
         self.last_accessed_at = time.time()
 
@@ -64,19 +104,27 @@ class SessionRecord:
 active_sessions: Dict[str, SessionRecord] = {}
 
 
-async def session_ttl_sweeper():
-    """Background task that reaps sessions exceeding TTL limits."""
-    while True:
-        await asyncio.sleep(60)
-        now = time.time()
-        expired_ids = [
-            sid for sid, rec in active_sessions.items()
+def reap_expired_sessions() -> None:
+    """Removes sessions idle longer than the TTL and wipes their workspaces."""
+    now = time.time()
+    with sessions_lock:
+        expired = [
+            active_sessions.pop(sid)
+            for sid, rec in list(active_sessions.items())
             if now - rec.last_accessed_at > SESSION_TTL_SECONDS
         ]
-        for sid in expired_ids:
-            record = active_sessions.pop(sid, None)
-            if record:
-                record.workspace.cleanup()
+    for rec in expired:
+        rec.workspace.cleanup()
+
+
+async def session_ttl_sweeper():
+    """Background task that reaps expired sessions every minute."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await asyncio.to_thread(reap_expired_sessions)
+        except Exception:
+            logger.exception("Session sweeper iteration failed")
 
 
 @asynccontextmanager
@@ -84,10 +132,11 @@ async def lifespan(app: FastAPI):
     sweeper_task = asyncio.create_task(session_ttl_sweeper())
     yield
     sweeper_task.cancel()
-    # Teardown all sessions on shutdown
-    for rec in active_sessions.values():
+    with sessions_lock:
+        remaining = list(active_sessions.values())
+        active_sessions.clear()
+    for rec in remaining:
         rec.workspace.cleanup()
-    active_sessions.clear()
 
 
 app = FastAPI(
@@ -99,74 +148,89 @@ app = FastAPI(
 
 
 def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
-    """Enforces API Key authentication on protected endpoints."""
-    if not header_key or header_key != API_KEY_ENV:
+    """Authenticates the caller and returns their tenant ID."""
+    tenant_id = None
+    if header_key:
+        presented = header_key.encode()
+        # Compare against every key without returning early, so response time
+        # doesn't reveal which (or whether any) configured key was close.
+        for key, tenant in API_KEYS:
+            if secrets.compare_digest(presented, key):
+                tenant_id = tenant
+    if tenant_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-API-Key header",
         )
-    return header_key
+    return tenant_id
+
+
+def get_authorized_session(session_id: str, tenant_id: str) -> SessionRecord:
+    """Ensures the session exists and belongs to the caller's tenant."""
+    with sessions_lock:
+        rec = active_sessions.get(session_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Session not found or expired")
+        if rec.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="Forbidden: Access denied to this session")
+        rec.touch()
+        return rec
 
 
 @app.get("/healthz")
 def health_check():
-    """Liveness probe for AWS Load Balancer target health checks."""
-    return {"status": "healthy", "active_sessions": len(active_sessions)}
+    with sessions_lock:
+        count = len(active_sessions)
+    return {"status": "healthy", "active_sessions": count}
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-def create_session(request: CreateSessionRequest, _key: str = Security(verify_api_key)):
-    """Allocates a dedicated ephemeral directory and container execution boundary."""
+def create_session(request: CreateSessionRequest, tenant_id: str = Security(verify_api_key)):
+    if request.template not in ALLOWED_TEMPLATES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Template '{request.template}' not permitted. Allowed: {list(ALLOWED_TEMPLATES)}"
+        )
+
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
     workspace = SandboxedWorkspace(base_image=request.template)
-    active_sessions[session_id] = SessionRecord(session_id=session_id, workspace=workspace)
+
+    with sessions_lock:
+        active_sessions[session_id] = SessionRecord(
+            session_id=session_id,
+            workspace=workspace,
+            tenant_id=tenant_id,
+        )
 
     return CreateSessionResponse(
-        session_id=session_id,
-        created_at=time.time(),
-        status="ready",
+        session_id=session_id, tenant_id=tenant_id, created_at=time.time(), status="ready"
     )
 
 
 @app.post("/v1/sessions/{session_id}/write")
-def write_file(session_id: str, request: WriteFileRequest, _key: str = Security(verify_api_key)):
-    """Writes files securely into the tenant workspace."""
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found or expired")
-
-    record = active_sessions[session_id]
-    record.touch()
+def write_file(session_id: str, request: WriteFileRequest, tenant_id: str = Security(verify_api_key)):
+    rec = get_authorized_session(session_id, tenant_id)
     try:
-        msg = record.workspace.write_file(request.path, request.content)
+        msg = rec.workspace.write_file(request.path, request.content)
         return {"status": "success", "message": msg}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 
 
 @app.get("/v1/sessions/{session_id}/read", response_model=ReadFileResponse)
-def read_file(session_id: str, path: str, _key: str = Security(verify_api_key)):
-    """Reads files from the tenant workspace."""
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found or expired")
-
-    record = active_sessions[session_id]
-    record.touch()
+def read_file(session_id: str, path: str, tenant_id: str = Security(verify_api_key)):
+    rec = get_authorized_session(session_id, tenant_id)
     try:
-        content = record.workspace.read_file(path)
+        content = rec.workspace.read_file(path)
         return ReadFileResponse(path=path, content=content)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 
 
 @app.post("/v1/sessions/{session_id}/exec", response_model=RunCommandResponse)
-def run_command(session_id: str, request: RunCommandRequest, _key: str = Security(verify_api_key)):
-    """Executes a command inside the isolated container runtime."""
-    if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found or expired")
-
-    record = active_sessions[session_id]
-    record.touch()
-    raw_output = record.workspace.run_command(
+def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(verify_api_key)):
+    rec = get_authorized_session(session_id, tenant_id)
+    raw_output = rec.workspace.run_command(
         command=request.command,
         timeout_seconds=request.timeout_seconds,
     )
@@ -174,11 +238,15 @@ def run_command(session_id: str, request: RunCommandRequest, _key: str = Securit
 
 
 @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_200_OK)
-def destroy_session(session_id: str, _key: str = Security(verify_api_key)):
-    """Immediately terminates the session and wipes workspace files from disk."""
-    record = active_sessions.pop(session_id, None)
-    if not record:
-        raise HTTPException(status_code=404, detail="Session not found")
+def destroy_session(session_id: str, tenant_id: str = Security(verify_api_key)):
+    with sessions_lock:
+        rec = active_sessions.get(session_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if rec.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        active_sessions.pop(session_id, None)
 
-    record.workspace.cleanup()
+    rec.workspace.cleanup()
+
     return {"status": "terminated", "session_id": session_id}

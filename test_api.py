@@ -1,9 +1,10 @@
 import json
+import os
 import urllib.request
 import urllib.error
 
-BASE_URL = "http://127.0.0.1:8000"
-API_KEY = "sb_live_secret_key_123"
+BASE_URL = os.getenv("SANDBOX_API_URL", "http://127.0.0.1:8000")
+API_KEY = os.environ["SANDBOX_API_KEY"]
 
 
 def request(method: str, path: str, body: dict = None):
