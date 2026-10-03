@@ -79,6 +79,50 @@ Tools: `write_file`, `read_file`, `run_command`. `handle_tool_call` never raises
 come back as text the model can act on — and long output is trimmed to 8,000 characters,
 keeping the beginning and the end.
 
+## MCP server (Claude Code, Claude Desktop, other MCP clients)
+
+The package includes an MCP server that gives any MCP client a sandbox as tools — no code
+needed. Install with the `mcp` extra (Python 3.10+):
+
+```bash
+pip install "airlock-sandbox[mcp]"
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi airlock -- airlock-sandbox-mcp
+```
+
+Add `-e SANDBOX_API_INSECURE=1` if the server uses a self-signed certificate. With
+[uv](https://docs.astral.sh/uv/) you can skip the install and use
+`-- uvx --from "airlock-sandbox[mcp]" airlock-sandbox-mcp` as the command instead.
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "airlock": {
+      "command": "airlock-sandbox-mcp",
+      "env": {
+        "SANDBOX_API_URL": "https://<server>",
+        "SANDBOX_API_KEY": "<key>",
+        "AIRLOCK_EGRESS": "pypi"
+      }
+    }
+  }
+}
+```
+
+On Windows, if Claude Desktop can't find the command, use its full path (`where airlock-sandbox-mcp`).
+
+**Tools:** `run_command`, `write_file`, `read_file`, `list_files`, `egress_log`,
+`sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
+on first use and deleted when the client disconnects; files persist between commands
+within it. `AIRLOCK_EGRESS` (or `--egress`) sets which hosts the sandbox may reach — it
+must be allowed by your tenant's policy; leave it unset for no network.
+
 ## Errors
 
 All errors inherit from `SandboxError`:

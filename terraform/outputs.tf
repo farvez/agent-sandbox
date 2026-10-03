@@ -10,17 +10,17 @@ output "instance_id" {
 
 output "instance_public_ip" {
   description = "Public IPv4 address of the sandbox EC2 host"
-  value       = aws_instance.sandbox_host.public_ip
+  value       = aws_eip.sandbox.public_ip
 }
 
 output "api_endpoint" {
   description = "HTTPS API base URL"
-  value       = var.domain_name != "" ? "https://${var.domain_name}" : "https://${aws_instance.sandbox_host.public_ip}"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : "https://${aws_eip.sandbox.public_ip}"
 }
 
 output "test_curl_command" {
   description = "Health check (-k only needed for the self-signed certificate when no domain is set)"
   value = (var.domain_name != ""
     ? "curl https://${var.domain_name}/healthz"
-  : "curl -k https://${aws_instance.sandbox_host.public_ip}/healthz")
+  : "curl -k https://${aws_eip.sandbox.public_ip}/healthz")
 }

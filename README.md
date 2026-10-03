@@ -163,6 +163,21 @@ One-time setup: on pypi.org and test.pypi.org, add a pending publisher for proje
 `airlock-sandbox`, owner `farvez`, repository `agent-sandbox`, workflow `release-sdk.yml`,
 environment `pypi` / `testpypi`.
 
+### MCP server
+
+`pip install "airlock-sandbox[mcp]"` adds `airlock-sandbox-mcp`, an MCP server (stdio) that
+gives Claude Code, Claude Desktop or any MCP client a sandbox as tools: `run_command`,
+`write_file`, `read_file`, `list_files`, `egress_log`, `sandbox_info`, `reset_sandbox`.
+
+```bash
+claude mcp add --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi airlock -- airlock-sandbox-mcp
+```
+
+One session per server process, created on first use and deleted on disconnect. MCP
+clients kill servers about 2 s after disconnecting, so the session ID is also recorded in
+the user's local state directory and anything a killed run left behind is deleted on the
+next start. Setup for Claude Desktop: [sdk/python/README.md](sdk/python/README.md#mcp-server-claude-code-claude-desktop-other-mcp-clients).
+
 ### Live demo
 
 `demo_live.py` runs four acts against a deployed server: hello world, an LLM agent fixing
@@ -308,6 +323,7 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_tracer_parse.py` | `strace -c` parsing with and without the errors column |
 | `tests/test_limits.py` | Limits config (defaults, overrides, validation), token bucket with a fake clock, session and running-command limits, usage report |
 | `tests/test_sdk.py` | The SDK against the real API over HTTP: lifecycle, structured results, files, every error type, retries on 429/503 with `Retry-After`, agent tools in both formats, legacy text parsing, use with `AutonomousCodingAgent` |
+| `tests/test_mcp.py` | The MCP server through a real MCP client (in memory and as a real stdio process): tool list and hints, lazy session and cleanup on disconnect, tool errors, expired-session recovery, reset, info and egress log, sessions left by a killed run deleted on next start |
 | `sdk/python/tests/` | Offline SDK checks run against the built wheel on Python 3.9 and 3.13 in CI |
 | `tests/test_workspace_pool.py` | Slot claiming, wiping, capacity, stale-claim reset after restart, disk usage measurement, quota on API writes |
 | `tests/test_egress_proxy.py` | Host rules, wildcards, presets, private-IP checks, signed passes (forgery, expiry), and the live proxy on local sockets: tunnel, 403/405/407 cases, logging |
@@ -338,8 +354,10 @@ $(terraform output -raw fetch_api_keys_command)   # prints tenant:key pairs
   (`curl -k`).
 - **Shell access:** no SSH. Use `aws ssm start-session --target <instance_id>`.
   Provisioning log: `/var/log/user_data.log`; service log: `journalctl -u agent-sandbox`.
+- **Stable address:** the API sits on an Elastic IP, so its URL (and the self-signed
+  certificate's IP) stays the same across redeploys; `terraform destroy` releases it.
 - **Shipping code changes:** `terraform apply` re-zips `src/`, so a code change replaces
-  the instance (sessions are in memory and are lost).
+  the instance (sessions are in memory and are lost); the URL and API keys stay the same.
 - **Adding a tenant:** add its name to `tenants` and `terraform apply`, then restart the
   service (`systemctl restart agent-sandbox` via SSM). Removing a name revokes its key.
 - **Key rotation:** `terraform apply -replace='random_password.tenant_key["acme"]'`, then restart.
@@ -393,7 +411,7 @@ than a benchmark score.
 
 - Keys and limits in a database with self-service issuing; shared state for multiple API servers
 - Persistent session store (Redis/Postgres) for more than one API worker
-- MCP server so MCP-capable agents (Claude Code, Claude Desktop, …) can use a sandbox as tools
+- Remote (HTTP) MCP endpoint on the server, so clients connect with just a URL and key
 - JavaScript/TypeScript SDK
 - Egress: human approval for new hosts, log rotation, per-tenant bandwidth limits
 - Repeated eval runs with pass@k, and logging whether the agent attempted exfiltration

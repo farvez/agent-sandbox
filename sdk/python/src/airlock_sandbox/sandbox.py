@@ -163,6 +163,13 @@ class Sandbox:
         self.disk_quota_mb: Optional[int] = None
 
     @classmethod
+    def attach(cls, session_id: str, *args, **kwargs) -> "Sandbox":
+        """A handle to an existing session (e.g. one created by another process), without creating one."""
+        sandbox = cls(*args, **kwargs)
+        sandbox.session_id = session_id
+        return sandbox
+
+    @classmethod
     def create(cls, *args, **kwargs) -> "Sandbox":
         """Creates and starts a sandbox. Remember to close() it, or use `with Sandbox(...)`."""
         return cls(*args, **kwargs).start()
@@ -179,13 +186,18 @@ class Sandbox:
         self.disk_quota_mb = data.get("disk_quota_mb")
         return self
 
-    def close(self) -> None:
-        """Deletes the session and its files. Safe to call more than once."""
+    def close(self, timeout: Optional[float] = None) -> None:
+        """Deletes the session and its files. Safe to call more than once.
+
+        `timeout` (seconds) makes this a single quick attempt with no retries — for
+        shutdown paths that only have a short grace period.
+        """
         if not self.session_id:
             return
         session_id, self.session_id = self.session_id, None
         try:
-            self._http.request("DELETE", f"/v1/sessions/{session_id}")
+            self._http.request("DELETE", f"/v1/sessions/{session_id}",
+                               timeout=timeout, retries=0 if timeout else None)
         except SandboxError as err:
             if err.status != 404:  # already gone (expired) is fine
                 raise

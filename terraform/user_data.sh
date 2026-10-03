@@ -8,6 +8,9 @@ exec > >(tee /var/log/user_data.log | logger -t user-data -s 2>/dev/console) 2>&
 echo "=== Starting Agent-Sandbox Provisioning ==="
 
 export DEBIAN_FRONTEND=noninteractive
+# The Elastic IP is attached a few seconds into boot, briefly swapping the public
+# address; retry downloads instead of failing provisioning on that blip.
+echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
 AWS_REGION="${aws_region}"
 APP_BUNDLE="${app_bundle_s3}"
 API_KEY_PARAM="${api_key_param}"
@@ -28,13 +31,13 @@ apt-get install -y ca-certificates curl gnupg lsb-release unzip python3-pip pyth
   debian-keyring debian-archive-keyring apt-transport-https
 
 # 2. AWS CLI v2 (to fetch the code bundle and the API key)
-curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH.zip" -o /tmp/awscliv2.zip
+curl -fsSL --retry 5 --retry-all-errors "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH.zip" -o /tmp/awscliv2.zip
 unzip -q /tmp/awscliv2.zip -d /tmp
 /tmp/aws/install
 
 # 3. Docker CE
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL --retry 5 --retry-all-errors https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
   > /etc/apt/sources.list.d/docker.list
 apt-get update -y
@@ -43,7 +46,7 @@ apt-get install -y docker-ce docker-ce-cli containerd.io
 # 4. gVisor (runsc) from its official apt repository; apt verifies the package
 #    signature. (Standalone runsc binaries are no longer published under latest/.)
 echo "=== Installing gVisor (runsc) ==="
-curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+curl -fsSL --retry 5 --retry-all-errors https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
   > /etc/apt/sources.list.d/gvisor.list
 apt-get update -y
@@ -163,9 +166,9 @@ systemctl daemon-reload
 systemctl enable --now agent-sandbox
 
 # 7. Caddy reverse proxy for TLS
-curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+curl -1sLf --retry 5 --retry-all-errors https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
   | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+curl -1sLf --retry 5 --retry-all-errors https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
   > /etc/apt/sources.list.d/caddy-stable.list
 apt-get update -y
 apt-get install -y caddy
@@ -178,9 +181,8 @@ $DOMAIN {
 }
 EOF
 else
-  # No domain: self-signed certificate for the public IP (clients need -k or to trust Caddy's CA)
-  IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
-  PUBLIC_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+  # No domain: self-signed certificate for the Elastic IP (clients need -k or to trust Caddy's CA)
+  PUBLIC_IP="${public_ip}"
   cat > /etc/caddy/Caddyfile <<EOF
 {
 	default_sni $PUBLIC_IP

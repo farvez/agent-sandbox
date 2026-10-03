@@ -61,3 +61,22 @@ def test_truncate_keeps_both_ends():
     text = "start" + "x" * 20_000 + "end"
     out = truncate(text, 1000)
     assert out.startswith("start") and out.endswith("end") and "TRUNCATED" in out
+
+
+def test_mcp_server_lists_tools_without_contacting_the_server():
+    """Only when installed with the [mcp] extra (Python 3.10+)."""
+    pytest.importorskip("mcp")
+    import asyncio
+
+    import mcp
+    from airlock_sandbox.mcp_server import SandboxHolder, build_server
+
+    holder = SandboxHolder(egress=[], template="sandbox-base:latest",
+                           factory=lambda **kw: (_ for _ in ()).throw(AssertionError("no session expected")))
+
+    async def go():
+        async with mcp.Client(build_server(holder)) as client:
+            return [t.name for t in (await client.list_tools()).tools]
+
+    assert asyncio.run(go()) == ["run_command", "write_file", "read_file", "list_files",
+                                 "egress_log", "sandbox_info", "reset_sandbox"]

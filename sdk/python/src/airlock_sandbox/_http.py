@@ -41,21 +41,25 @@ class HTTPClient:
         else:
             self._ssl = None
 
-    def request(self, method: str, path: str, body: Optional[dict] = None) -> Any:
+    def request(
+        self, method: str, path: str, body: Optional[dict] = None, *,
+        timeout: Optional[float] = None, retries: Optional[int] = None,
+    ) -> Any:
+        """`timeout` / `retries` override the client defaults for this one call."""
         attempt = 0
         while True:
             try:
-                return self._send(method, path, body)
+                return self._send(method, path, body, timeout)
             except SandboxError as err:
-                wait = self._retry_wait(err, method, attempt)
+                wait = self._retry_wait(err, method, attempt, retries)
                 if wait is None:
                     raise
                 attempt += 1
                 time.sleep(wait)
 
-    def _retry_wait(self, err: SandboxError, method: str, attempt: int) -> Optional[float]:
+    def _retry_wait(self, err: SandboxError, method: str, attempt: int, retries: Optional[int] = None) -> Optional[float]:
         """Seconds to wait before retrying, or None to give up."""
-        if attempt >= self.max_retries:
+        if attempt >= (self.max_retries if retries is None else retries):
             return None
         backoff = min(2 ** attempt, self.max_retry_wait)
         if isinstance(err, RateLimitError):
@@ -68,7 +72,7 @@ class HTTPClient:
             return backoff
         return None
 
-    def _send(self, method: str, path: str, body: Optional[dict]) -> Any:
+    def _send(self, method: str, path: str, body: Optional[dict], timeout: Optional[float] = None) -> Any:
         req = urllib.request.Request(
             self.base_url + path,
             data=json.dumps(body).encode() if body is not None else None,
@@ -81,7 +85,7 @@ class HTTPClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(req, context=self._ssl, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, context=self._ssl, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as err:
             raise self._http_error(err) from None

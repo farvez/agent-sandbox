@@ -222,7 +222,23 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# 7. EC2 host
+# 7. Elastic IP: a fixed public address that survives instance replacement, so the
+#    API URL developers use never changes. Created before the instance so the boot
+#    script (Caddy's certificate) already knows the final address.
+resource "aws_eip" "sandbox" {
+  domain = "vpc"
+
+  tags = {
+    Name = "agent-sandbox-api"
+  }
+}
+
+resource "aws_eip_association" "sandbox" {
+  instance_id   = aws_instance.sandbox_host.id
+  allocation_id = aws_eip.sandbox.id
+}
+
+# 8. EC2 host
 resource "aws_instance" "sandbox_host" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -254,6 +270,7 @@ resource "aws_instance" "sandbox_host" {
     workspace_slots    = var.workspace_slots
     workspace_quota_mb = var.workspace_quota_mb
     tenant_limits_json = jsonencode(var.tenant_limits)
+    public_ip          = aws_eip.sandbox.public_ip
   })
 
   # A new code bundle produces new user_data, which replaces the host.
