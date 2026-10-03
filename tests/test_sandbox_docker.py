@@ -202,3 +202,11 @@ def test_command_over_quota_warns_and_blocks_further_writes():
             ws.write_file("more.txt", "x" * 1000)
         ws.run_command("rm big.bin")
         ws.write_file("more.txt", "x" * 1000)   # writable again once space is freed
+
+
+def test_execute_returns_structured_result(workspace):
+    result = workspace.execute("echo out; echo err >&2; exit 4")
+    assert result == {"stdout": "out\n", "stderr": "err\n", "exit_code": 4,
+                      "timed_out": False, "oom_killed": False, "warnings": []}
+    timed = workspace.execute("sleep 10", timeout_seconds=1)
+    assert timed["timed_out"] and timed["exit_code"] == -1

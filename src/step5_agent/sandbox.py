@@ -142,7 +142,14 @@ class SandboxedWorkspace:
             return f.read()
 
     def run_command(self, command: str, timeout_seconds: int = 15) -> str:
-        """Executes a command inside the hardened container with dropped privileges."""
+        """Executes a command and returns the result as text (the agent tools' format)."""
+        return format_result(self.execute(command, timeout_seconds))
+
+    def execute(self, command: str, timeout_seconds: int = 15) -> dict:
+        """Executes a command inside the hardened container with dropped privileges.
+
+        Returns {stdout, stderr, exit_code, timed_out, oom_killed, warnings}.
+        """
         container = None
         try:
             mounts = {
@@ -190,38 +197,36 @@ class SandboxedWorkspace:
             container = self.client.containers.create(**container_kwargs)
             container.start()
 
-            oom_killed = False
             try:
                 wait_res = container.wait(timeout=timeout_seconds)
                 exit_code = wait_res.get("StatusCode", -1)
             except Exception:
                 container.kill()
-                return f"[TIMEOUT]: Execution exceeded {timeout_seconds}s limit.\n[EXIT CODE]: -1"
+                return {
+                    "stdout": "", "stderr": "", "exit_code": -1, "timed_out": True, "oom_killed": False,
+                    "warnings": [f"Execution exceeded {timeout_seconds}s limit."],
+                }
 
             # attrs is a snapshot from create(); refresh it to see the final state
             container.reload()
-            if container.attrs.get("State", {}).get("OOMKilled", False):
-                oom_killed = True
+            oom_killed = bool(container.attrs.get("State", {}).get("OOMKilled", False))
 
             stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace")
             stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")
 
-            output = []
-            if stdout.strip():
-                output.append(f"[STDOUT]:\n{stdout.strip()}")
-            if stderr.strip():
-                output.append(f"[STDERR]:\n{stderr.strip()}")
+            warnings = []
             if oom_killed:
-                output.append("[WARNING]: Process killed by cgroups (Memory limit exceeded).")
+                warnings.append("Process killed by cgroups (Memory limit exceeded).")
             used = self.disk_usage_bytes()
             if used > self.quota_bytes:
-                output.append(
-                    f"[WARNING]: Workspace uses {used / 2**20:.1f} MB, over its "
+                warnings.append(
+                    f"Workspace uses {used / 2**20:.1f} MB, over its "
                     f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files before writing more."
                 )
-            output.append(f"[EXIT CODE]: {exit_code}")
-
-            return "\n".join(output)
+            return {
+                "stdout": stdout, "stderr": stderr, "exit_code": exit_code,
+                "timed_out": False, "oom_killed": oom_killed, "warnings": warnings,
+            }
 
         finally:
             if container:
@@ -248,3 +253,17 @@ class SandboxedWorkspace:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup()
+
+
+def format_result(result: dict) -> str:
+    """The text form of an execute() result: [STDOUT] / [STDERR] / [WARNING] / [TIMEOUT] / [EXIT CODE]."""
+    if result["timed_out"]:
+        return f"[TIMEOUT]: {result['warnings'][0]}\n[EXIT CODE]: {result['exit_code']}"
+    output = []
+    if result["stdout"].strip():
+        output.append(f"[STDOUT]:\n{result['stdout'].strip()}")
+    if result["stderr"].strip():
+        output.append(f"[STDERR]:\n{result['stderr'].strip()}")
+    output.extend(f"[WARNING]: {warning}" for warning in result["warnings"])
+    output.append(f"[EXIT CODE]: {result['exit_code']}")
+    return "\n".join(output)

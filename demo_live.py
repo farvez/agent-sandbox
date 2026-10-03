@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from src.client import RemoteSandbox, SandboxAPIError
+from agent_sandbox import AuthenticationError, RateLimitError, Sandbox
 
 load_dotenv()
 console = Console()
@@ -41,7 +41,7 @@ def act_header(number: int, title: str, subtitle: str) -> None:
 
 def act_hello() -> None:
     act_header(1, "Hello sandbox", "Untrusted code runs on the server, not on this laptop")
-    with RemoteSandbox() as sbx:
+    with Sandbox() as sbx:
         console.print(f"Server  [cyan]{sbx.base_url}[/cyan]  ·  health {sbx.health()}")
         console.print(f"Session [cyan]{sbx.session_id}[/cyan] for tenant [cyan]{sbx.tenant_id}[/cyan]")
 
@@ -83,7 +83,7 @@ def act_agent() -> None:
 
     from src.step5_agent.agent import AutonomousCodingAgent
 
-    with RemoteSandbox() as sbx:
+    with Sandbox() as sbx:
         sbx.write_file("math_lib.py", BROKEN_LIB)
         sbx.write_file("test_math.py", TESTS)
         console.print(Syntax(BROKEN_LIB, "python", theme="monokai", line_numbers=True))
@@ -155,7 +155,7 @@ def act_red_team() -> None:
     table.add_column("Stopped by", style="cyan")
     blocked = 0
 
-    with RemoteSandbox() as sbx:
+    with Sandbox() as sbx:
         for name, intent, command, timeout, is_blocked, control in SHELL_ATTACKS:
             with console.status(f"{name}…"):
                 out = sbx.run_command(command, timeout_seconds=timeout)
@@ -199,9 +199,9 @@ def act_red_team() -> None:
         grabbed, ok = [], False
         try:
             for _ in range(200):
-                grabbed.append(RemoteSandbox().start())
-        except SandboxAPIError as err:
-            ok = err.status == 429
+                grabbed.append(Sandbox(max_retries=0).start())   # no retries: we want to see the 429
+        except RateLimitError:
+            ok = True
         finally:
             for sbx in grabbed:
                 sbx.close()
@@ -212,10 +212,10 @@ def act_red_team() -> None:
 
     with console.status("Stolen / guessed key…"):
         try:
-            RemoteSandbox(api_key="guessed-key").start()
+            Sandbox(api_key="guessed-key").start()
             ok = False
-        except SandboxAPIError as err:
-            ok = err.status == 401
+        except AuthenticationError:
+            ok = True
     blocked += ok
     table.add_row("Guessed API key", "use the service without a valid key", "[green]BLOCKED[/green]" if ok else "[red]NOT BLOCKED[/red]",
                   "API key auth (constant time)")
@@ -230,18 +230,13 @@ def act_red_team() -> None:
 
 def act_egress() -> None:
     act_header(4, "Egress gateway", "Internet access only to approved sites, with every connection logged")
-    probe = RemoteSandbox()
-    probe.start()
-    try:
-        policy = probe.egress_policy()
-    finally:
-        probe.close()
+    policy = Sandbox().egress_policy()   # tenant-level call; no session needed
     if "pypi.org" not in policy:
         console.print(f"[yellow]This tenant may reach {policy or 'nothing'}; Act 4 needs 'pypi' in its egress policy "
                       "(Terraform: -var 'egress_policy={default=[\"pypi\"]}').[/yellow]")
         return
 
-    with RemoteSandbox(egress=["pypi"]) as sbx:
+    with Sandbox(egress=["pypi"]) as sbx:
         console.print(f"Session [cyan]{sbx.session_id}[/cyan] may reach: [cyan]{', '.join(sbx.egress)}[/cyan]")
         steps = [
             ("pip install from PyPI", "pip install --quiet requests==2.32.3 && python3 -c 'import requests; print(\"requests\", requests.__version__)'", 60),

@@ -92,7 +92,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <div class="stats" aria-label="Measured on the live deployment">
     <div class="stat"><b>13 / 13</b><span>attacks blocked or contained in the live red-team demo</span></div>
     <div class="stat"><b>~1.1 s</b><span>round trip for one command, laptop → EC2 → back</span></div>
-    <div class="stat"><b>157</b><span>automated tests, run on Linux with real containers in CI</span></div>
+    <div class="stat"><b>197</b><span>automated tests, run on Linux with real containers in CI</span></div>
     <div class="stat"><b>~$2 / day</b><span>one c7i-flex.large host; no per-session fee</span></div>
   </div>
 </header>
@@ -126,7 +126,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <li>Each key belongs to a tenant; tenants can't see each other's sessions</li>
       <li>Per-tenant limits: sessions, requests per minute, concurrent commands</li>
       <li>Image allowlist; path and symlink escapes refused</li>
-      <li>Python client with the same interface as a local workspace</li></ul></div>
+      <li>Python SDK (<code>agent-sandbox-sdk</code>): structured results, typed errors, automatic retries, ready-made OpenAI and Anthropic agent tools</li></ul></div>
     <div class="card"><span class="who">Egress gateway</span><h3>Internet only where approved</h3><ul>
       <li>Per-tenant allowlist; sessions opt in, e.g. <code>egress=["pypi"]</code></li>
       <li>Each session on its own private network; the proxy is the only way out</li>
@@ -172,7 +172,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <tr><th>What it is</th><td class="us">Self-hosted sandbox API</td><td>Sandbox platform (cloud, or self-host)</td><td>Managed agent runtime</td><td>Finished agents for end users</td></tr>
       <tr><th>Runs where</th><td class="us"><span class="chip y">yes</span>Your AWS account</td><td>E2B cloud, or your cluster</td><td>Anthropic's infrastructure</td><td>The vendor's cloud</td></tr>
       <tr><th>Model choice</th><td class="us"><span class="chip y">yes</span>Any</td><td><span class="chip y">yes</span>Any</td><td><span class="chip p">part</span>Claude</td><td><span class="chip n">no</span>Vendor's own</td></tr>
-      <tr><th>Can build on it</th><td class="us"><span class="chip y">yes</span>API + client</td><td><span class="chip y">yes</span>Python / JS SDKs</td><td><span class="chip y">yes</span>APIs</td><td><span class="chip n">no</span>Consumer products</td></tr>
+      <tr><th>Can build on it</th><td class="us"><span class="chip y">yes</span>API + Python SDK</td><td><span class="chip y">yes</span>Python / JS SDKs</td><td><span class="chip y">yes</span>APIs</td><td><span class="chip n">no</span>Consumer products</td></tr>
       <tr><th>Isolation</th><td class="us">gVisor containers</td><td>Firecracker microVMs</td><td>Managed sandbox</td><td>Per-agent VMs / computers</td></tr>
       <tr><th>Host requirements</th><td class="us"><span class="chip y">yes</span>Any VM; no KVM needed</td><td>KVM-capable hosts for self-hosting</td><td>—</td><td>—</td></tr>
       <tr><th>Long-running sessions</th><td class="us"><span class="chip n">no</span>Files persist, processes don't</td><td><span class="chip y">yes</span></td><td><span class="chip y">yes</span>with checkpoints</td><td><span class="chip y">yes</span>always-on</td></tr>
@@ -192,7 +192,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     <div class="gap"><b>Long-running sessions</b><span>Each command gets a new container. Servers, background jobs and installed packages don't survive between calls; competitors keep a live machine per agent.</span></div>
     <div class="gap"><b>Human approval for new hosts</b><span>The egress allowlist is set by policy; there's no "ask a person" step like Muse's Sentinel for hosts outside it yet.</span></div>
     <div class="gap"><b>Browser and computer use</b><span>No headless browser or desktop, which Dots, Grok Bot and Muse rely on.</span></div>
-    <div class="gap"><b>Packaged SDKs</b><span>A Python client exists in the repo; it isn't on PyPI, and there's no JavaScript SDK.</span></div>
+    <div class="gap"><b>JavaScript SDK and MCP server</b><span>The Python SDK is packaged and ready for PyPI; there's no JavaScript SDK yet, and no MCP server for MCP-capable agents.</span></div>
     <div class="gap"><b>Command audit trail</b><span>Outbound connections are logged, but not which commands ran and what they returned — the next thing an enterprise security review asks for.</span></div>
     <div class="gap"><b>Scale</b><span>One host (100 concurrent sessions); sessions and limits live in one API process's memory. Per-tenant limits and disk quotas are in place. Fine for a pilot, not yet for many servers.</span></div>
     <div class="gap"><b>Snapshots and templates</b><span>Two allowed images; no way to save a prepared environment and start new sessions from it.</span></div>
@@ -207,7 +207,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     <div class="card"><span class="who">Built</span><h3>Egress gateway</h3><p>Per-tenant allowlist with every outbound connection logged. Next: human approval for hosts outside the list.</p></div>
     <div class="card"><h3>Command audit log</h3><p>Every command and file write per tenant alongside the egress log, exportable for compliance.</p></div>
     <div class="card"><h3>Persistent sessions</h3><p>A container that lives for the session, so agents can install packages and run servers.</p></div>
-    <div class="card"><h3>SDK on PyPI</h3><p><code>pip install</code>, plus drop-in tool definitions for OpenAI, Anthropic and open-model agent frameworks.</p></div>
+    <div class="card"><span class="who">Built</span><h3>Python SDK</h3><p><code>pip install agent-sandbox-sdk</code>, with drop-in tool definitions for OpenAI and Anthropic agents. Next: an MCP server.</p></div>
   </div>
 </section>
 

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sandbox-sdk"
+dynamic = ["version"]
+description = "Python SDK for agent-sandbox: isolated, network-controlled code execution for AI agents."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []  # standard library only
+authors = [{ name = "farvez" }]
+keywords = ["ai", "agents", "sandbox", "code-execution", "gvisor", "llm", "tools"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/farvez/agent-sandbox"
+Source = "https://github.com/farvez/agent-sandbox/tree/main/sdk/python"
+Issues = "https://github.com/farvez/agent-sandbox/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "agent_sandbox.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_sandbox = ["py.typed"]

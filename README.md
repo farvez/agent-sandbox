@@ -129,22 +129,39 @@ uvicorn src.api.server:app --host 127.0.0.1 --port 8000
 python test_api.py        # end-to-end smoke test; reads SANDBOX_API_KEY and SANDBOX_API_URL
 ```
 
-### Python client
+### Python SDK
 
-`src/client` wraps the API in a class with the same `read_file` / `write_file` /
-`run_command` methods as the local workspace, so `AutonomousCodingAgent` works against a
-hosted sandbox unchanged:
+`sdk/python` is the client developers install — `pip install agent-sandbox-sdk`
+(standard library only, Python 3.9+). Full guide: [sdk/python/README.md](sdk/python/README.md).
 
 ```python
-from src.client import RemoteSandbox
+from agent_sandbox import Sandbox
+from agent_sandbox.tools import openai_tools, anthropic_tools, handle_tool_call
 
-with RemoteSandbox(base_url="https://<host>", api_key="<key>") as sbx:
-    sbx.write_file("main.py", "print(2 ** 16)")
-    print(sbx.run_command("python3 main.py"))
+with Sandbox(base_url="https://<host>", api_key="<key>", egress=["pypi"]) as sbx:
+    sbx.run("pip install requests", timeout=60).check()
+    sbx.files.write("main.py", "import requests; print(requests.__version__)")
+    result = sbx.run("python3 main.py")
+    print(result.stdout, result.exit_code, result.ok)
 ```
 
-`SANDBOX_API_URL`, `SANDBOX_API_KEY` and `SANDBOX_API_INSECURE=1` (self-signed
-certificate) are read from the environment when the arguments are omitted.
+- `run()` returns a `CommandResult` (`stdout`, `stderr`, `exit_code`, `ok`, `timed_out`,
+  `oom_killed`, `warnings`, `check()`); `str(result)` is the text form for an LLM.
+- Typed errors (`RateLimitError`, `QuotaExceededError`, `PermissionDeniedError`, …); 429 and
+  503 are retried automatically, honouring `Retry-After`.
+- `openai_tools()` / `anthropic_tools()` + `handle_tool_call()` give an agent
+  `write_file` / `read_file` / `run_command` in one line; errors come back as text.
+- A `Sandbox` also has `read_file` / `write_file` / `run_command`, so the repo's
+  `AutonomousCodingAgent` runs against a hosted sandbox unchanged.
+- Reads `SANDBOX_API_URL`, `SANDBOX_API_KEY` and `SANDBOX_API_INSECURE=1` when arguments
+  are omitted. For development: `pip install -e ./sdk/python` (included in `requirements-dev.txt`).
+
+**Releasing:** bump `__version__` in `sdk/python/src/agent_sandbox/__init__.py`, then push a
+tag `sdk-v<version>`; `.github/workflows/release-sdk.yml` builds and publishes to PyPI with
+trusted publishing (no stored token). Running that workflow manually publishes to TestPyPI.
+One-time setup: on pypi.org and test.pypi.org, add a pending publisher for project
+`agent-sandbox-sdk`, owner `farvez`, repository `agent-sandbox`, workflow `release-sdk.yml`,
+environment `pypi` / `testpypi`.
 
 ### Live demo
 
@@ -211,8 +228,8 @@ sandbox (private network, no route out) ──► egress proxy ──► pypi.or
 - `pip install` works: packages go to `/workspace/.local` (persistent, on `sys.path`).
 
 ```python
-with RemoteSandbox(egress=["pypi"]) as sbx:
-    sbx.run_command("pip install requests", timeout_seconds=60)
+with Sandbox(egress=["pypi"]) as sbx:
+    sbx.run("pip install requests", timeout=60).check()
     print(sbx.egress_log())
 ```
 
@@ -245,7 +262,7 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | POST | `/v1/sessions` | `{template?, metadata?, egress?}` | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
-| POST | `/v1/sessions/{id}/exec` | `{command, timeout_seconds (1–60)}` | `{command, output}` · `429` too many commands running |
+| POST | `/v1/sessions/{id}/exec` | `{command, timeout_seconds (1–60)}` | `{command, stdout, stderr, exit_code, timed_out, oom_killed, warnings, output}` · `429` too many commands running |
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
 | GET | `/v1/egress/policy` | — | `{tenant_id, allowed}` — hosts this tenant may request |
@@ -275,7 +292,8 @@ Allowed templates: `sandbox-base:latest`, `python:3.11-slim`.
 
 CI (GitHub Actions, `.github/workflows/ci.yml`) runs on every push and pull request:
 the full pytest suite on Linux with real containers — including the egress and
-symlink-escape tests that skip on Windows — plus `terraform fmt`, `validate`, and a
+symlink-escape tests that skip on Windows; the SDK wheel built, checked with `twine`,
+installed and tested on Python 3.9 and 3.13; plus `terraform fmt`, `validate`, and a
 render + `bash -n` of the boot script.
 
 ```bash
@@ -289,6 +307,8 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_sandbox_paths.py` | Traversal, absolute paths, prefix-sibling dirs, symlinks to host files and dirs |
 | `tests/test_tracer_parse.py` | `strace -c` parsing with and without the errors column |
 | `tests/test_limits.py` | Limits config (defaults, overrides, validation), token bucket with a fake clock, session and running-command limits, usage report |
+| `tests/test_sdk.py` | The SDK against the real API over HTTP: lifecycle, structured results, files, every error type, retries on 429/503 with `Retry-After`, agent tools in both formats, legacy text parsing, use with `AutonomousCodingAgent` |
+| `sdk/python/tests/` | Offline SDK checks run against the built wheel on Python 3.9 and 3.13 in CI |
 | `tests/test_workspace_pool.py` | Slot claiming, wiping, capacity, stale-claim reset after restart, disk usage measurement, quota on API writes |
 | `tests/test_egress_proxy.py` | Host rules, wildcards, presets, private-IP checks, signed passes (forgery, expiry), and the live proxy on local sockets: tunnel, 403/405/407 cases, logging |
 | `tests/test_api_server.py` | Auth, tenant key parsing, cross-tenant isolation, template allowlist, egress policy and log endpoints, per-tenant 429s (sessions, rate with `Retry-After`, concurrent exec), usage endpoint, slots freed on delete/expiry/failed start, lifecycle, slow exec not blocking other requests |
@@ -363,8 +383,8 @@ than a benchmark score.
 ├── src/
 │   ├── step1_runner/ … step5_agent/
 │   ├── egress/             # allowlisting HTTPS proxy + Docker wiring
-│   ├── client/             # Python client for the hosted API
 │   └── api/server.py
+├── sdk/python/             # agent-sandbox-sdk: the Python SDK (pip package)
 ├── terraform/              # AWS deployment
 └── tests/                  # pytest suite
 ```
@@ -373,6 +393,7 @@ than a benchmark score.
 
 - Keys and limits in a database with self-service issuing; shared state for multiple API servers
 - Persistent session store (Redis/Postgres) for more than one API worker
-- Python SDK on PyPI (`Sandbox().run(...)`), built from `src/client`
+- MCP server so MCP-capable agents (Claude Code, Claude Desktop, …) can use a sandbox as tools
+- JavaScript/TypeScript SDK
 - Egress: human approval for new hosts, log rotation, per-tenant bandwidth limits
 - Repeated eval runs with pass@k, and logging whether the agent attempted exfiltration

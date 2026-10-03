@@ -36,9 +36,10 @@ class FakeWorkspace:
     def read_file(self, path):
         return self._ws.read_file(path)
 
-    def run_command(self, command, timeout_seconds=15):
+    def execute(self, command, timeout_seconds=15):
         time.sleep(self.exec_delay)
-        return f"[STDOUT]:\nran {command}\n[EXIT CODE]: 0"
+        return {"stdout": f"ran {command}\n", "stderr": "", "exit_code": 0,
+                "timed_out": False, "oom_killed": False, "warnings": []}
 
     def egress_events(self, limit=200):
         return [{"decision": "allow", "host": "pypi.org"}] if self.egress else []
@@ -340,3 +341,11 @@ def test_usage_endpoint(client, monkeypatch):
     assert body["limits"]["max_sessions"] == 7
     assert body["sessions_open"] == 1
     assert client.get("/v1/usage", headers=OTHER_TENANT).json()["limits"]["max_sessions"] == 5
+
+
+def test_exec_returns_structured_fields_and_text(client):
+    sid = create(client)
+    body = client.post(f"/v1/sessions/{sid}/exec", json={"command": "echo hi"}, headers=AUTH).json()
+    assert body["stdout"] == "ran echo hi\n" and body["exit_code"] == 0
+    assert body["timed_out"] is False and body["oom_killed"] is False and body["warnings"] == []
+    assert body["output"] == "[STDOUT]:\nran echo hi\n[EXIT CODE]: 0"

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
-from src.step5_agent.sandbox import SandboxedWorkspace
+from src.step5_agent.sandbox import SandboxedWorkspace, format_result
 from src.step5_agent.workspace_pool import QuotaExceededError, WorkspaceCapacityError
 
 
@@ -122,7 +122,13 @@ class RunCommandRequest(BaseModel):
 
 class RunCommandResponse(BaseModel):
     command: str
-    output: str
+    output: str = Field(description="Text form: [STDOUT]/[STDERR]/[WARNING]/[TIMEOUT]/[EXIT CODE]")
+    stdout: str
+    stderr: str
+    exit_code: int
+    timed_out: bool
+    oom_killed: bool
+    warnings: List[str]
 
 
 class SessionRecord:
@@ -327,11 +333,11 @@ def read_file(session_id: str, path: str, tenant_id: str = Security(authorize)):
 def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
     with LIMITS.running_command(tenant_id):  # 429 when too many are already running
-        raw_output = rec.workspace.run_command(
+        result = rec.workspace.execute(
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
-    return RunCommandResponse(command=request.command, output=raw_output)
+    return RunCommandResponse(command=request.command, output=format_result(result), **result)
 
 
 @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_200_OK)

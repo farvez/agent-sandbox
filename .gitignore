@@ -15,3 +15,8 @@ venv/
 terraform/.build/
 tfplan
 *.tfplan
+
+# Python packaging
+dist/
+build/
+*.egg-info/

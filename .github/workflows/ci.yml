@@ -34,6 +34,36 @@ jobs:
       - name: Run tests
         run: pytest -q -rs
 
+  sdk:
+    name: SDK wheel (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]   # oldest supported and newest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build and check metadata
+        run: |
+          pip install build twine
+          python -m build sdk/python
+          twine check sdk/python/dist/*
+
+      # Tests the built wheel, not the source tree: catches missing modules and
+      # syntax newer than the oldest supported Python.
+      - name: Install wheel and run offline tests
+        run: |
+          pip install sdk/python/dist/*.whl pytest
+          cd sdk/python
+          python -c "import agent_sandbox, sys; assert 'site-packages' in agent_sandbox.__file__, agent_sandbox.__file__"
+          pytest -q tests -p no:cacheprovider
+
   terraform:
     name: Terraform (fmt, validate, render)
     runs-on: ubuntu-latest
