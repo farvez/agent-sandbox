@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import src.api.server as server
+from src.api.limits import LimitTracker, load_tenant_limits
 from src.step5_agent.workspace_pool import WorkspaceCapacityError
 from tests.conftest import TENANT_KEYS, make_offline_workspace
 
@@ -53,6 +54,10 @@ def client(monkeypatch):
     FakeWorkspace.exec_delay = 0.0
     FakeWorkspace.capacity_left = None
     server.active_sessions.clear()
+    # Generous limits so other tests never trip them; limit tests install their own.
+    monkeypatch.setattr(server, "LIMITS", LimitTracker(load_tenant_limits(
+        '{"*": {"max_sessions": 50, "requests_per_minute": 10000, "max_concurrent_exec": 50}}'
+    )))
     with TestClient(server.app) as c:
         yield c
     server.active_sessions.clear()
@@ -250,3 +255,88 @@ def test_no_free_workspace_returns_503(client):
     assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
     res = client.post("/v1/sessions", json={}, headers=AUTH)
     assert res.status_code == 503 and "in use" in res.json()["detail"]
+
+
+# ---------------------------------------------------------------- per-tenant limits
+
+
+def set_limits(monkeypatch, config):
+    tracker = LimitTracker(load_tenant_limits(config))
+    monkeypatch.setattr(server, "LIMITS", tracker)
+    return tracker
+
+
+def test_session_limit_returns_429_and_delete_frees_a_slot(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_sessions": 2}}')
+    first = create(client)
+    create(client)
+    res = client.post("/v1/sessions", json={}, headers=AUTH)
+    assert res.status_code == 429 and "2 of 2" in res.json()["detail"]
+    # Another tenant has its own allowance.
+    assert client.post("/v1/sessions", json={}, headers=OTHER_TENANT).status_code == 201
+    client.delete(f"/v1/sessions/{first}", headers=AUTH)
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+
+
+def test_reaped_sessions_free_their_slot(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_sessions": 1}}')
+    sid = create(client)
+    server.active_sessions[sid].last_accessed_at -= server.SESSION_TTL_SECONDS + 1
+    server.reap_expired_sessions()
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+
+
+def test_failed_session_start_does_not_use_up_the_limit(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_sessions": 1}}')
+    FakeWorkspace.capacity_left = 0
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 503
+    FakeWorkspace.capacity_left = None
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+
+
+def test_refused_egress_does_not_use_up_the_limit(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_sessions": 1}}')
+    assert client.post("/v1/sessions", json={"egress": ["evil.com"]}, headers=AUTH).status_code == 403
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+
+
+def test_rate_limit_returns_429_with_retry_after(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"requests_per_minute": 3}}')
+    for _ in range(3):
+        assert client.get("/v1/egress/policy", headers=AUTH).status_code == 200
+    res = client.get("/v1/egress/policy", headers=AUTH)
+    assert res.status_code == 429
+    assert int(res.headers["Retry-After"]) >= 1
+    assert client.get("/v1/egress/policy", headers=OTHER_TENANT).status_code == 200
+
+
+def test_bad_key_is_rejected_before_rate_limiting(client, monkeypatch):
+    tracker = set_limits(monkeypatch, '{"*": {"requests_per_minute": 1}}')
+    for _ in range(3):
+        assert client.get("/v1/egress/policy", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert tracker.usage("acme")["requests_available"] == 1   # untouched
+
+
+def test_concurrent_exec_limit_returns_429(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_concurrent_exec": 1}}')
+    sid = create(client)
+    FakeWorkspace.exec_delay = 1.5
+    slow = threading.Thread(target=client.post, args=(f"/v1/sessions/{sid}/exec",),
+                            kwargs={"json": {"command": "sleep"}, "headers": AUTH})
+    slow.start()
+    time.sleep(0.3)
+    res = client.post(f"/v1/sessions/{sid}/exec", json={"command": "second"}, headers=AUTH)
+    slow.join()
+    assert res.status_code == 429 and "1 allowed" in res.json()["detail"]
+    FakeWorkspace.exec_delay = 0
+    assert client.post(f"/v1/sessions/{sid}/exec", json={"command": "after"}, headers=AUTH).status_code == 200
+
+
+def test_usage_endpoint(client, monkeypatch):
+    set_limits(monkeypatch, '{"*": {"max_sessions": 5}, "acme": {"max_sessions": 7}}')
+    create(client)
+    body = client.get("/v1/usage", headers=AUTH).json()
+    assert body["tenant_id"] == "acme"
+    assert body["limits"]["max_sessions"] == 7
+    assert body["sessions_open"] == 1
+    assert client.get("/v1/usage", headers=OTHER_TENANT).json()["limits"]["max_sessions"] == 5

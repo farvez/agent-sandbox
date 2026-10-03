@@ -113,6 +113,12 @@ ${egress_policy_json}
 POLICY
 chmod 0644 /etc/agent-sandbox/egress-policy.json
 
+# Per-tenant limits (Terraform var.tenant_limits): sessions, requests/minute, concurrent commands.
+cat > /etc/agent-sandbox/tenant-limits.json <<'LIMITS'
+${tenant_limits_json}
+LIMITS
+chmod 0644 /etc/agent-sandbox/tenant-limits.json
+
 # Launcher fetches the tenant keys from SSM on every start, so they never sit on
 # disk; rotating or adding keys only needs a parameter update plus a restart.
 cat > "$APP_DIR/start.sh" <<EOF
@@ -142,6 +148,7 @@ Environment=SANDBOX_SESSION_TTL=$SESSION_TTL
 Environment=SANDBOX_WORKSPACE_POOL=$WS_ROOT
 Environment=SANDBOX_WORKSPACE_QUOTA_MB=$WS_QUOTA_MB
 Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
+Environment=SANDBOX_TENANT_LIMITS_FILE=/etc/agent-sandbox/tenant-limits.json
 Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
 ExecStart=$APP_DIR/start.sh
 Restart=always

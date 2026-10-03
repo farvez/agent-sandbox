@@ -253,6 +253,7 @@ resource "aws_instance" "sandbox_host" {
     workspaces_disk_gb = var.workspaces_disk_gb
     workspace_slots    = var.workspace_slots
     workspace_quota_mb = var.workspace_quota_mb
+    tenant_limits_json = jsonencode(var.tenant_limits)
   })
 
   # A new code bundle produces new user_data, which replaces the host.

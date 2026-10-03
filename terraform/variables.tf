@@ -72,3 +72,10 @@ variable "workspaces_disk_gb" {
     error_message = "workspaces_disk_gb must be 1-20 (the root volume is 30 GB and also holds the OS and Docker images)."
   }
 }
+
+variable "tenant_limits" {
+  description = "Per-tenant limits; \"*\" sets defaults for all tenants. Keys: max_sessions, requests_per_minute, max_concurrent_exec. Unset = built-in defaults (10, 120, 4)."
+  type        = map(map(number))
+  default     = {}
+  # Example: { "*" = { max_sessions = 10 }, acme = { max_sessions = 50, requests_per_minute = 600 } }
+}

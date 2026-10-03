@@ -194,6 +194,22 @@ def act_red_team() -> None:
         table.add_row("Symlink escape", "plant a link to a host file, then read it", "[green]BLOCKED[/green]" if ok else "[red]NOT BLOCKED[/red]",
                       "symlinks resolved before access")
 
+    # One tenant tries to take every sandbox on the server for itself.
+    with console.status("Grabbing every sandbox…"):
+        grabbed, ok = [], False
+        try:
+            for _ in range(200):
+                grabbed.append(RemoteSandbox().start())
+        except SandboxAPIError as err:
+            ok = err.status == 429
+        finally:
+            for sbx in grabbed:
+                sbx.close()
+    blocked += ok
+    table.add_row("Hog the server", "open sessions until no one else can get one",
+                  f"[green]STOPPED at {len(grabbed)}[/green]" if ok else "[red]NOT STOPPED[/red]",
+                  "per-tenant session limit")
+
     with console.status("Stolen / guessed key…"):
         try:
             RemoteSandbox(api_key="guessed-key").start()
@@ -204,7 +220,7 @@ def act_red_team() -> None:
     table.add_row("Guessed API key", "use the service without a valid key", "[green]BLOCKED[/green]" if ok else "[red]NOT BLOCKED[/red]",
                   "API key auth (constant time)")
 
-    total = len(SHELL_ATTACKS) + 4
+    total = len(SHELL_ATTACKS) + 5
     console.print(table)
     style = "green" if blocked == total else "red"
     console.print(Panel(f"[bold]{blocked}/{total} attacks blocked[/bold]", border_style=style))

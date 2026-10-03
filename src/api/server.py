@@ -9,10 +9,12 @@ import logging
 from typing import Dict, List, Optional, Set, Tuple
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Security, status
+from fastapi import FastAPI, HTTPException, Request, Security, status
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
+from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.step5_agent.sandbox import SandboxedWorkspace
@@ -69,6 +71,7 @@ def load_egress_policy(raw: Optional[str], path: Optional[str]) -> Dict[str, Lis
 
 
 EGRESS_POLICY = load_egress_policy(os.getenv("SANDBOX_EGRESS_POLICY"), os.getenv("SANDBOX_EGRESS_POLICY_FILE"))
+LIMITS = LimitTracker(load_tenant_limits(os.getenv("SANDBOX_TENANT_LIMITS"), os.getenv("SANDBOX_TENANT_LIMITS_FILE")))
 
 SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))
 ALLOWED_TEMPLATES: Set[str] = {
@@ -148,6 +151,7 @@ def reap_expired_sessions() -> None:
         ]
     for rec in expired:
         rec.workspace.cleanup()
+        LIMITS.close_session(rec.tenant_id)
 
 
 async def session_ttl_sweeper():
@@ -170,6 +174,7 @@ async def lifespan(app: FastAPI):
         active_sessions.clear()
     for rec in remaining:
         rec.workspace.cleanup()
+        LIMITS.close_session(rec.tenant_id)
     shutdown_gateway()
 
 
@@ -199,6 +204,18 @@ def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
     return tenant_id
 
 
+def authorize(tenant_id: str = Security(verify_api_key)) -> str:
+    """Every authenticated request: valid key, then the tenant's request-rate limit."""
+    LIMITS.check_rate(tenant_id)
+    return tenant_id
+
+
+@app.exception_handler(LimitExceeded)
+def limit_exceeded(request: Request, exc: LimitExceeded) -> JSONResponse:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(status_code=429, content={"detail": str(exc)}, headers=headers)
+
+
 def get_authorized_session(session_id: str, tenant_id: str) -> SessionRecord:
     """Ensures the session exists and belongs to the caller's tenant."""
     with sessions_lock:
@@ -219,7 +236,7 @@ def health_check():
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-def create_session(request: CreateSessionRequest, tenant_id: str = Security(verify_api_key)):
+def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize)):
     if request.template not in ALLOWED_TEMPLATES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -235,13 +252,18 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
             detail=f"Egress not permitted for this tenant: {refused}. Allowed: {allowed}",
         )
 
+    LIMITS.open_session(tenant_id)  # 429 when the tenant is at its session limit
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
     try:
         workspace = SandboxedWorkspace(
             base_image=request.template, egress=egress, session_id=session_id, tenant_id=tenant_id
         )
     except WorkspaceCapacityError as e:
+        LIMITS.close_session(tenant_id)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except Exception:
+        LIMITS.close_session(tenant_id)
+        raise
 
     with sessions_lock:
         active_sessions[session_id] = SessionRecord(
@@ -260,21 +282,27 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
     )
 
 
+@app.get("/v1/usage")
+def usage(tenant_id: str = Security(authorize)):
+    """This tenant's limits and current usage."""
+    return {"tenant_id": tenant_id, **LIMITS.usage(tenant_id)}
+
+
 @app.get("/v1/egress/policy")
-def egress_policy(tenant_id: str = Security(verify_api_key)):
+def egress_policy(tenant_id: str = Security(authorize)):
     """The hosts this tenant's sessions may request."""
     return {"tenant_id": tenant_id, "allowed": EGRESS_POLICY.get(tenant_id, [])}
 
 
 @app.get("/v1/sessions/{session_id}/egress")
-def egress_log(session_id: str, limit: int = 200, tenant_id: str = Security(verify_api_key)):
+def egress_log(session_id: str, limit: int = 200, tenant_id: str = Security(authorize)):
     """Every outbound connection this session attempted, allowed or denied."""
     rec = get_authorized_session(session_id, tenant_id)
     return {"session_id": session_id, "events": rec.workspace.egress_events(limit=max(1, min(limit, 1000)))}
 
 
 @app.post("/v1/sessions/{session_id}/write")
-def write_file(session_id: str, request: WriteFileRequest, tenant_id: str = Security(verify_api_key)):
+def write_file(session_id: str, request: WriteFileRequest, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
     try:
         msg = rec.workspace.write_file(request.path, request.content)
@@ -286,7 +314,7 @@ def write_file(session_id: str, request: WriteFileRequest, tenant_id: str = Secu
 
 
 @app.get("/v1/sessions/{session_id}/read", response_model=ReadFileResponse)
-def read_file(session_id: str, path: str, tenant_id: str = Security(verify_api_key)):
+def read_file(session_id: str, path: str, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
     try:
         content = rec.workspace.read_file(path)
@@ -296,17 +324,18 @@ def read_file(session_id: str, path: str, tenant_id: str = Security(verify_api_k
 
 
 @app.post("/v1/sessions/{session_id}/exec", response_model=RunCommandResponse)
-def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(verify_api_key)):
+def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
-    raw_output = rec.workspace.run_command(
-        command=request.command,
-        timeout_seconds=request.timeout_seconds,
-    )
+    with LIMITS.running_command(tenant_id):  # 429 when too many are already running
+        raw_output = rec.workspace.run_command(
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
     return RunCommandResponse(command=request.command, output=raw_output)
 
 
 @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_200_OK)
-def destroy_session(session_id: str, tenant_id: str = Security(verify_api_key)):
+def destroy_session(session_id: str, tenant_id: str = Security(authorize)):
     with sessions_lock:
         rec = active_sessions.get(session_id)
         if not rec:
@@ -316,5 +345,6 @@ def destroy_session(session_id: str, tenant_id: str = Security(verify_api_key)):
         active_sessions.pop(session_id, None)
 
     rec.workspace.cleanup()
+    LIMITS.close_session(tenant_id)
 
     return {"status": "terminated", "session_id": session_id}

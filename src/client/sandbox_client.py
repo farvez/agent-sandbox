@@ -21,10 +21,12 @@ from typing import List, Optional
 
 
 class SandboxAPIError(RuntimeError):
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, retry_after: Optional[int] = None):
         super().__init__(f"HTTP {status}: {detail}")
         self.status = status
         self.detail = detail
+        # Seconds to wait before retrying, when the server sent Retry-After (rate limit).
+        self.retry_after = retry_after
 
 
 class RemoteSandbox:
@@ -93,6 +95,10 @@ class RemoteSandbox:
         """Hosts this tenant's sessions may request."""
         return self._request("GET", "/v1/egress/policy")["allowed"]
 
+    def usage(self) -> dict:
+        """This tenant's limits and current usage (sessions, running commands, request budget)."""
+        return self._request("GET", "/v1/usage")
+
     def health(self) -> dict:
         return self._request("GET", "/healthz")
 
@@ -121,5 +127,6 @@ class RemoteSandbox:
             # Path traversal and similar refusals surface as PermissionError, like the local workspace.
             if err.code == 403:
                 raise PermissionError(detail) from None
-            raise SandboxAPIError(err.code, str(detail)) from None
+            retry_after = err.headers.get("Retry-After")
+            raise SandboxAPIError(err.code, str(detail), int(retry_after) if retry_after else None) from None
 
