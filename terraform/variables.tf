@@ -44,3 +44,31 @@ variable "egress_policy" {
   type        = map(list(string))
   default     = {}
 }
+
+variable "workspace_quota_mb" {
+  description = "Disk quota per sandbox session workspace, enforced by the kernel (ext4 project quota)."
+  type        = number
+  default     = 512
+}
+
+variable "workspace_slots" {
+  description = "Maximum concurrent sandbox sessions (one quota-limited workspace slot each)."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.workspace_slots >= 1 && var.workspace_slots <= 999
+    error_message = "workspace_slots must be between 1 and 999."
+  }
+}
+
+variable "workspaces_disk_gb" {
+  description = "Total size of the workspace filesystem; caps all workspaces together (taken from the 30 GB root volume)."
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.workspaces_disk_gb >= 1 && var.workspaces_disk_gb <= 20
+    error_message = "workspaces_disk_gb must be 1-20 (the root volume is 30 GB and also holds the OS and Docker images)."
+  }
+}

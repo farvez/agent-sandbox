@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import src.api.server as server
+from src.step5_agent.workspace_pool import WorkspaceCapacityError
 from tests.conftest import TENANT_KEYS, make_offline_workspace
 
 AUTH = {"X-API-Key": TENANT_KEYS["acme"]}
@@ -15,9 +16,15 @@ class FakeWorkspace:
     """Real host-side file handling, fake container execution."""
 
     exec_delay = 0.0
+    capacity_left = None   # None = unlimited; an int counts down to a 503
 
     def __init__(self, base_image="sandbox-base:latest", egress=None, session_id=None, tenant_id="local"):
+        if FakeWorkspace.capacity_left is not None:
+            if FakeWorkspace.capacity_left <= 0:
+                raise WorkspaceCapacityError("All sandbox workspaces are in use; try again shortly.")
+            FakeWorkspace.capacity_left -= 1
         self._ws = make_offline_workspace()
+        self.quota_bytes = self._ws.quota_bytes
         self.workspace_dir = self._ws.workspace_dir
         self.egress = egress or []
         self.cleaned = False
@@ -44,6 +51,7 @@ class FakeWorkspace:
 def client(monkeypatch):
     monkeypatch.setattr(server, "SandboxedWorkspace", FakeWorkspace)
     FakeWorkspace.exec_delay = 0.0
+    FakeWorkspace.capacity_left = None
     server.active_sessions.clear()
     with TestClient(server.app) as c:
         yield c
@@ -220,3 +228,25 @@ def test_load_egress_policy_rejects_bad_config(raw):
 def test_load_egress_policy_empty_means_no_internet():
     assert server.load_egress_policy(None, None) == {}
     assert server.load_egress_policy("  ", None) == {}
+
+
+# ---------------------------------------------------------------- disk quota and capacity
+
+
+def test_create_reports_disk_quota(client):
+    assert client.post("/v1/sessions", json={}, headers=AUTH).json()["disk_quota_mb"] == 512
+
+
+def test_write_past_quota_returns_413(client):
+    sid = create(client)
+    ws = server.active_sessions[sid].workspace._ws
+    ws.quota_bytes = 2**20
+    res = client.post(f"/v1/sessions/{sid}/write", json={"path": "big.txt", "content": "x" * 2_000_000}, headers=AUTH)
+    assert res.status_code == 413 and "quota" in res.json()["detail"]
+
+
+def test_no_free_workspace_returns_503(client):
+    FakeWorkspace.capacity_left = 1
+    assert client.post("/v1/sessions", json={}, headers=AUTH).status_code == 201
+    res = client.post("/v1/sessions", json={}, headers=AUTH)
+    assert res.status_code == 503 and "in use" in res.json()["detail"]

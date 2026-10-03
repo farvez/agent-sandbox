@@ -8,6 +8,7 @@ import docker
 from src.egress.gateway import EgressGateway, EgressSession, get_gateway
 from src.egress.proxy import expand_rules
 from src.step4_gvisor.gvisor_runner import GVisorSandboxRunner
+from src.step5_agent.workspace_pool import QuotaExceededError, disk_usage, get_pool, quota_bytes_from_env
 
 # Every container gets these. User installs land in the persistent workspace
 # (the root filesystem is read-only and /tmp is noexec, which breaks native wheels).
@@ -27,6 +28,10 @@ class SandboxedWorkspace:
     By default containers have no network at all. Passing `egress` (host rules or
     presets such as "pypi") routes them through the egress gateway instead, which
     allows HTTPS to exactly those hosts and logs every connection.
+
+    The workspace has a disk quota (SANDBOX_WORKSPACE_QUOTA_MB, default 512): enforced
+    by the kernel when SANDBOX_WORKSPACE_POOL points at the quota-limited slot pool,
+    and checked by the workspace itself everywhere (see workspace_pool.py).
     """
 
     def __init__(
@@ -36,6 +41,7 @@ class SandboxedWorkspace:
         session_id: Optional[str] = None,
         tenant_id: str = "local",
         gateway: Optional[EgressGateway] = None,
+        quota_mb: Optional[int] = None,
     ):
         self.base_image = base_image
         self.session_id = session_id or f"local_{uuid.uuid4().hex[:12]}"
@@ -49,7 +55,10 @@ class SandboxedWorkspace:
         if os.getenv("SANDBOX_REQUIRE_GVISOR") == "1" and not self.has_gvisor:
             raise RuntimeError("SANDBOX_REQUIRE_GVISOR=1 but the Docker daemon has no 'runsc' runtime.")
 
-        self.workspace_dir = os.path.realpath(tempfile.mkdtemp(prefix="agent_workspace_"))
+        self.quota_bytes = quota_bytes_from_env(quota_mb)
+        self.pool = get_pool()
+        claimed = self.pool.claim() if self.pool else tempfile.mkdtemp(prefix="agent_workspace_")
+        self.workspace_dir = os.path.realpath(claimed)
         self.container_user = self._container_user()
 
         self.egress_rules = expand_rules(egress or [])
@@ -105,9 +114,20 @@ class SandboxedWorkspace:
             raise PermissionError(f"Access denied: symlink/path traversal outside workspace for '{relative_path}'")
         return candidate_path
 
+    def disk_usage_bytes(self) -> int:
+        return disk_usage(self.workspace_dir)
+
     def write_file(self, path: str, content: str) -> str:
-        """Writes content safely into the workspace."""
+        """Writes content safely into the workspace, within its disk quota."""
         safe_path = self._resolve_safe_path(path)
+        data_len = len(content.encode("utf-8"))
+        replaced = os.path.getsize(safe_path) if os.path.isfile(safe_path) else 0
+        projected = self.disk_usage_bytes() - replaced + data_len
+        if projected > self.quota_bytes:
+            raise QuotaExceededError(
+                f"Writing {path} would use {projected / 2**20:.1f} MB of the workspace's "
+                f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files first."
+            )
         os.makedirs(os.path.dirname(safe_path), exist_ok=True)
         with open(safe_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -193,6 +213,12 @@ class SandboxedWorkspace:
                 output.append(f"[STDERR]:\n{stderr.strip()}")
             if oom_killed:
                 output.append("[WARNING]: Process killed by cgroups (Memory limit exceeded).")
+            used = self.disk_usage_bytes()
+            if used > self.quota_bytes:
+                output.append(
+                    f"[WARNING]: Workspace uses {used / 2**20:.1f} MB, over its "
+                    f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files before writing more."
+                )
             output.append(f"[EXIT CODE]: {exit_code}")
 
             return "\n".join(output)
@@ -209,7 +235,12 @@ class SandboxedWorkspace:
         if self.gateway and self.egress:
             self.gateway.detach(self.egress)
             self.egress = None
-        if os.path.exists(self.workspace_dir):
+        if self.pool:
+            # Exactly once: after release the slot may already belong to another session.
+            if not getattr(self, "_released", False):
+                self._released = True
+                self.pool.release(self.workspace_dir)
+        elif os.path.exists(self.workspace_dir):
             shutil.rmtree(self.workspace_dir, ignore_errors=True)
 
     def __enter__(self):

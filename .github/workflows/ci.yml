@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (Linux, real containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build sandbox image
+        run: docker build -t sandbox-base:latest .
+
+      # Runs everything, including the Docker tests (network/OOM/timeout/read-only
+      # root, egress through the proxy) and the symlink-escape tests that are
+      # skipped on Windows. -rs lists anything that still skipped.
+      - name: Run tests
+        run: pytest -q -rs
+
+  terraform:
+    name: Terraform (fmt, validate, render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Validate
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # templatefile() fails on any unescaped ${...}; render the boot script with
+      # sample values and syntax-check the result with bash.
+      - name: Render and syntax-check user_data.sh
+        run: |
+          echo 'templatefile("user_data.sh", {aws_region="us-east-1", app_bundle_s3="s3://bucket/app.zip", api_key_param="/agent-sandbox/api-keys", domain_name="", session_ttl_secs=1800, egress_policy_json=jsonencode({default=["pypi"]}), workspaces_disk_gb=15, workspace_slots=100, workspace_quota_mb=512})' \
+            | terraform console > rendered.txt
+          sed -n '2,/^EOT/p' rendered.txt | sed '$d' > user_data.rendered.sh
+          bash -n user_data.rendered.sh
+          grep -q 'WS_SLOTS="100"' user_data.rendered.sh

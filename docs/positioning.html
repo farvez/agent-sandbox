@@ -90,9 +90,9 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <h1>Every serious agent now runs in a sandbox. Here's one you own.</h1>
   <p class="lede">agent-sandbox is a self-hosted execution layer for AI agents. An agent sends code over an API, the code runs in a throwaway gVisor container with no network and hard limits, and the result comes back. It runs in your own AWS account, with any model.</p>
   <div class="stats" aria-label="Measured on the live deployment">
-    <div class="stat"><b>11 / 11</b><span>attacks blocked or contained in the live red-team demo</span></div>
+    <div class="stat"><b>12 / 12</b><span>attacks blocked or contained in the live red-team demo</span></div>
     <div class="stat"><b>~1.1 s</b><span>round trip for one command, laptop → EC2 → back</span></div>
-    <div class="stat"><b>118</b><span>automated tests, incl. real-container security and egress checks</span></div>
+    <div class="stat"><b>133</b><span>automated tests, run on Linux with real containers in CI</span></div>
     <div class="stat"><b>~$2 / day</b><span>one c7i-flex.large host; no per-session fee</span></div>
   </div>
 </header>
@@ -119,7 +119,8 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       <li>gVisor user-space kernel (required on the server)</li>
       <li>No network by default · 256 MB RAM, no swap · 1 CPU · 64 processes</li>
       <li>No Linux capabilities · non-root · read-only system files</li>
-      <li>Per-command timeout; memory kills reported back</li></ul></div>
+      <li>Per-command timeout; memory kills reported back</li>
+      <li>512 MB disk quota per workspace, enforced by the kernel</li></ul></div>
     <div class="card"><span class="who">API</span><h3>Six endpoints, per-tenant keys</h3><ul>
       <li>Create session · write · read · exec · delete · health</li>
       <li>Each key belongs to a tenant; tenants can't see each other's sessions</li>
@@ -192,7 +193,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     <div class="gap"><b>Browser and computer use</b><span>No headless browser or desktop, which Dots, Grok Bot and Muse rely on.</span></div>
     <div class="gap"><b>Packaged SDKs</b><span>A Python client exists in the repo; it isn't on PyPI, and there's no JavaScript SDK.</span></div>
     <div class="gap"><b>Command audit trail</b><span>Outbound connections are logged, but not which commands ran and what they returned — the next thing an enterprise security review asks for.</span></div>
-    <div class="gap"><b>Scale and quotas</b><span>One host, in-memory sessions, no per-tenant caps or rate limits. Fine for a pilot, not for many customers.</span></div>
+    <div class="gap"><b>Scale and per-tenant limits</b><span>One host (100 concurrent sessions), in-memory sessions, no per-tenant caps or rate limits. Disk is quota-limited per workspace. Fine for a pilot, not for many customers.</span></div>
     <div class="gap"><b>Snapshots and templates</b><span>Two allowed images; no way to save a prepared environment and start new sessions from it.</span></div>
   </div>
 </section>
@@ -220,7 +221,7 @@ python demo_live.py                  # or --skip-agent to avoid OpenAI calls</pr
   <ol class="acts">
     <li><div class="t">Act 1<small>~30 s</small></div><div><h3>Hello sandbox</h3><p>Creates a session, writes a Python file, runs it on the server and prints the output and round-trip time.</p><p class="say">"This code didn't run on my laptop. It ran in a throwaway container on our server, as a non-root user, and the container is already gone."</p></div></li>
     <li><div class="t">Act 2<small>~90 s</small></div><div><h3>Agent at work</h3><p>Plants three bugs in a Fibonacci function. The agent reads the files, rewrites the function, runs the tests, and stops when they pass. The demo re-runs the tests itself instead of trusting the agent's word.</p><p class="say">"The model only decides what to do. Every file it touched and every command it ran happened inside the sandbox. Swap in Claude or Llama and nothing else changes."</p></div></li>
-    <li><div class="t">Act 3<small>~90 s</small></div><div><h3>Red team</h3><p>Runs 11 real attacks: exfiltration, stealing the server's AWS credentials, memory and fork bombs, an infinite loop, tampering with system files, hunting for secrets, probing the kernel, path traversal, a symlink escape, and a guessed key. Each row names the control that stopped it.</p><p class="say">"This is the question every security team asks: what happens when the model does something stupid, or someone tricks it into something malicious? Here's the answer, run live."</p></div></li>
+    <li><div class="t">Act 3<small>~90 s</small></div><div><h3>Red team</h3><p>Runs 12 real attacks: exfiltration, stealing the server's AWS credentials, memory and fork bombs, filling the disk, an infinite loop, tampering with system files, hunting for secrets, probing the kernel, path traversal, a symlink escape, and a guessed key. Each row names the control that stopped it.</p><p class="say">"This is the question every security team asks: what happens when the model does something stupid, or someone tricks it into something malicious? Here's the answer, run live."</p></div></li>
     <li><div class="t">Act 4<small>~60 s</small></div><div><h3>Egress gateway</h3><p>A session allowed only PyPI installs <code>requests</code>, then fails to reach example.com, fails to reach the cloud metadata service, and finds no route when it bypasses the proxy. Ends on the session's egress log.</p><p class="say">"Agents need packages, so we don't pretend they can live offline. They get exactly the sites your policy allows, and you get a record of every connection they tried."</p></div></li>
   </ol>
   <p class="muted">Act 4 needs <code>pypi</code> in the tenant's egress policy (Terraform: <code>-var 'egress_policy={default=["pypi"]}'</code>).</p>

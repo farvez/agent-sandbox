@@ -250,6 +250,9 @@ resource "aws_instance" "sandbox_host" {
     domain_name        = var.domain_name
     session_ttl_secs   = var.session_ttl_seconds
     egress_policy_json = jsonencode(var.egress_policy)
+    workspaces_disk_gb = var.workspaces_disk_gb
+    workspace_slots    = var.workspace_slots
+    workspace_quota_mb = var.workspace_quota_mb
   })
 
   # A new code bundle produces new user_data, which replaces the host.

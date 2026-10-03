@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.step5_agent.sandbox import SandboxedWorkspace
+from src.step5_agent.workspace_pool import QuotaExceededError, WorkspaceCapacityError
 
 
 
@@ -96,6 +97,7 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     tenant_id: str
     egress: List[str]
+    disk_quota_mb: int
     created_at: float
     status: str
 
@@ -234,9 +236,12 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
         )
 
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
-    workspace = SandboxedWorkspace(
-        base_image=request.template, egress=egress, session_id=session_id, tenant_id=tenant_id
-    )
+    try:
+        workspace = SandboxedWorkspace(
+            base_image=request.template, egress=egress, session_id=session_id, tenant_id=tenant_id
+        )
+    except WorkspaceCapacityError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
     with sessions_lock:
         active_sessions[session_id] = SessionRecord(
@@ -246,7 +251,12 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(veri
         )
 
     return CreateSessionResponse(
-        session_id=session_id, tenant_id=tenant_id, egress=egress, created_at=time.time(), status="ready"
+        session_id=session_id,
+        tenant_id=tenant_id,
+        egress=egress,
+        disk_quota_mb=workspace.quota_bytes // 2**20,
+        created_at=time.time(),
+        status="ready",
     )
 
 
@@ -271,6 +281,8 @@ def write_file(session_id: str, request: WriteFileRequest, tenant_id: str = Secu
         return {"status": "success", "message": msg}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except QuotaExceededError as e:
+        raise HTTPException(status_code=413, detail=str(e))
 
 
 @app.get("/v1/sessions/{session_id}/read", response_model=ReadFileResponse)

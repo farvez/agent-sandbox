@@ -14,6 +14,11 @@ API_KEY_PARAM="${api_key_param}"
 DOMAIN="${domain_name}"
 SESSION_TTL="${session_ttl_secs}"
 EGRESS_LOG_DIR=/var/lib/agent-sandbox/egress
+WS_ROOT=/var/lib/agent-sandbox/workspaces
+WS_IMAGE=/var/lib/agent-sandbox/workspaces.img
+WS_DISK_GB="${workspaces_disk_gb}"
+WS_SLOTS="${workspace_slots}"
+WS_QUOTA_MB="${workspace_quota_mb}"
 APP_DIR=/opt/agent-sandbox
 ARCH=$(uname -m)
 
@@ -75,8 +80,31 @@ python3 -m venv "$APP_DIR/.venv"
 # 6. Dedicated service user (in the docker group, not root)
 id -u sandbox >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin sandbox
 usermod -aG docker sandbox
-install -d -o sandbox -g sandbox -m 0700 /var/lib/agent-sandbox/workspaces
 install -d -o sandbox -g sandbox -m 0700 "$EGRESS_LOG_DIR"
+
+# 6b. Disk-limited workspaces. A dedicated ext4 filesystem (a loop-mounted image,
+#     size-capped so workspaces can never fill the main disk) with project quotas,
+#     and a fixed set of slot directories, each limited to WS_QUOTA_MB by the
+#     kernel. The API claims and wipes slots without needing root.
+echo "=== Creating quota-limited workspace slots ==="
+apt-get install -y quota "linux-modules-extra-$(uname -r)"
+printf 'quota_v2\nquota_tree\n' > /etc/modules-load.d/agent-sandbox-quota.conf   # load at every boot
+modprobe quota_v2
+modprobe quota_tree
+install -d -m 0755 /var/lib/agent-sandbox
+fallocate -l "$WS_DISK_GB"G "$WS_IMAGE"
+mkfs.ext4 -q -F -m 0 -O quota,project "$WS_IMAGE"
+install -d -m 0755 "$WS_ROOT"
+echo "$WS_IMAGE $WS_ROOT ext4 loop,prjquota,nodev,nosuid 0 0" >> /etc/fstab
+mount "$WS_ROOT"
+chmod 0755 "$WS_ROOT"
+for i in $(seq 1 "$WS_SLOTS"); do
+  slot="$WS_ROOT/slot-$(printf '%03d' "$i")"
+  install -d -o sandbox -g sandbox -m 0700 "$slot"
+  chattr +P -p "$((10000 + i))" "$slot"
+  setquota -P "$((10000 + i))" 0 "$((WS_QUOTA_MB * 1024))" 0 0 "$WS_ROOT"
+done
+install -d -o sandbox -g sandbox -m 0700 "$WS_ROOT.locks"
 
 # Per-tenant egress policy (Terraform var.egress_policy). Tenants not listed get no internet.
 install -d -m 0755 /etc/agent-sandbox
@@ -111,7 +139,8 @@ WorkingDirectory=$APP_DIR
 Environment=PYTHONPATH=$APP_DIR
 Environment=SANDBOX_REQUIRE_GVISOR=1
 Environment=SANDBOX_SESSION_TTL=$SESSION_TTL
-Environment=TMPDIR=/var/lib/agent-sandbox/workspaces
+Environment=SANDBOX_WORKSPACE_POOL=$WS_ROOT
+Environment=SANDBOX_WORKSPACE_QUOTA_MB=$WS_QUOTA_MB
 Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
 Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
 ExecStart=$APP_DIR/start.sh

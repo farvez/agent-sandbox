@@ -45,9 +45,12 @@ def test_timeout_kills_container(workspace):
 
 
 def test_root_filesystem_is_read_only(workspace):
+    # Writes fail either way: non-root hits "Permission denied" first (Linux, gVisor),
+    # otherwise "Read-only file system". So also check the mount flag itself.
     out = workspace.run_command("touch /etc/pwned || touch /usr/local/bin/pwned")
-    assert "Read-only file system" in out
     assert "[EXIT CODE]: 0" not in out
+    flags = workspace.run_command("awk '$2==\"/\" {split($4,o,\",\"); print o[1]}' /proc/self/mounts")
+    assert "[STDOUT]:\nro\n" in flags
 
 
 def test_tmp_is_writable_but_size_limited(workspace):
@@ -184,3 +187,18 @@ def test_first_start_prunes_orphaned_networks_but_never_live_ones():
         if b:
             b.cleanup()
         shutdown_gateway()
+
+
+# ---------------------------------------------------------------- disk quota (soft layer)
+
+
+def test_command_over_quota_warns_and_blocks_further_writes():
+    from src.step5_agent.workspace_pool import QuotaExceededError
+
+    with SandboxedWorkspace(quota_mb=2) as ws:
+        out = ws.run_command("head -c 5M /dev/zero > big.bin")
+        assert "over its 2 MB disk quota" in out
+        with pytest.raises(QuotaExceededError):
+            ws.write_file("more.txt", "x" * 1000)
+        ws.run_command("rm big.bin")
+        ws.write_file("more.txt", "x" * 1000)   # writable again once space is freed
