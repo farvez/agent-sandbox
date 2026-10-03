@@ -1,0 +1,332 @@
+<title>agent-sandbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F3F5F2; --surface:#FFFFFF; --ink:#16201D; --muted:#5A6661; --line:#D4DAD5;
+  --accent:#0E7A6A; --accent-soft:#DCEFEA;
+  --crit:#B42318; --crit-soft:#FBE4E1; --high:#B4540A; --high-soft:#FCEBD8;
+  --med:#8A6D00; --med-soft:#F6EFCC; --low:#4B5B75; --low-soft:#E4E9F2;
+  --good:#1F7A3A; --good-soft:#DFF1E4;
+  --ring1:#E6ECE8; --ring2:#D6E6E0; --ring3:#C5DDD6;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0E1412; --surface:#161E1B; --ink:#E3EAE6; --muted:#98A6A0; --line:#2A3531;
+    --accent:#4FC4AE; --accent-soft:#143530;
+    --crit:#FF8A7E; --crit-soft:#3A1916; --high:#F5A25D; --high-soft:#3A2512;
+    --med:#E3C75A; --med-soft:#33300F; --low:#9DB0D3; --low-soft:#1D2638;
+    --good:#72D38F; --good-soft:#15301D;
+    --ring1:#141C19; --ring2:#18241F; --ring3:#1C2D27;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0E1412; --surface:#161E1B; --ink:#E3EAE6; --muted:#98A6A0; --line:#2A3531;
+  --accent:#4FC4AE; --accent-soft:#143530;
+  --crit:#FF8A7E; --crit-soft:#3A1916; --high:#F5A25D; --high-soft:#3A2512;
+  --med:#E3C75A; --med-soft:#33300F; --low:#9DB0D3; --low-soft:#1D2638;
+  --good:#72D38F; --good-soft:#15301D;
+  --ring1:#141C19; --ring2:#18241F; --ring3:#1C2D27;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:15px/1.6 var(--body);margin:0}
+.wrap{max-width:980px;margin:0 auto;padding-inline:20px;padding-block:40px 72px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:clamp(2.2rem,6vw,3.4rem);font-weight:700;letter-spacing:-.02em}
+h2{font-size:1.6rem;font-weight:700;letter-spacing:-.01em}
+h3{font-size:1.05rem;font-weight:500}
+p{margin:0;max-width:68ch}
+code,.mono{font-family:var(--mono);font-size:.88em}
+code{background:var(--accent-soft);padding:1px 5px;border-radius:3px}
+.eyebrow{font:500 .72rem/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+section{display:grid;gap:18px;padding-block:40px;border-top:1px solid var(--line)}
+header{display:grid;gap:16px;padding-bottom:36px}
+.lede{font-size:1.1rem;color:var(--muted)}
+.limits{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.limits span{font:500 .8rem var(--mono);border:1px solid var(--line);background:var(--surface);padding:5px 10px;border-radius:999px}
+.limits b{color:var(--accent);font-weight:500}
+
+/* nested isolation boundary */
+.layers{display:grid;gap:0}
+.ring{border:1.5px solid var(--line);border-radius:10px;padding:14px 14px 14px;display:grid;gap:10px}
+.ring>.tag{font:500 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.r1{background:var(--ring1)} .r2{background:var(--ring2);border-style:dashed} .r3{background:var(--ring3);border-color:var(--accent)}
+.r4{background:var(--surface);border-color:var(--accent);border-width:2px}
+.r4 .tag{color:var(--accent)}
+.warn-note{color:var(--high)}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.box{flex:1 1 200px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:.9rem}
+.box b{display:block;font-family:var(--mono);font-weight:500;font-size:.82rem;margin-bottom:2px}
+
+/* build steps (true sequence) */
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:0;counter-reset:s}
+.steps li{display:grid;grid-template-columns:56px 1fr;gap:14px;padding-block:14px;border-bottom:1px dashed var(--line)}
+.steps li:last-child{border-bottom:0}
+.steps .n{font:700 1.6rem/1 var(--display);color:var(--accent)}
+.steps .n small{display:block;font:500 .65rem var(--mono);color:var(--muted);letter-spacing:.08em;margin-top:4px}
+.steps p{color:var(--muted);font-size:.93rem;margin-top:4px}
+
+/* agent loop */
+.loop{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.loop .node{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font:500 .85rem var(--mono)}
+.loop .arrow{color:var(--muted);font-family:var(--mono)}
+.loop .node.hl{border-color:var(--accent);color:var(--accent)}
+
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{font:500 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--ground)}
+td .mono{white-space:nowrap}
+.verb{font:500 .75rem var(--mono);padding:2px 6px;border-radius:3px;background:var(--accent-soft);color:var(--accent)}
+
+/* review */
+.verdict{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.verdict div{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px}
+.verdict h3{margin-bottom:6px}
+.verdict ul{margin:0;padding-left:18px;color:var(--muted);font-size:.92rem;display:grid;gap:4px}
+.filters{display:flex;flex-wrap:wrap;gap:6px}
+.filters button{font:500 .78rem var(--mono);border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:5px 10px;border-radius:999px;cursor:pointer}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.filters button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.findings{display:grid;gap:8px}
+details{background:var(--surface);border:1px solid var(--line);border-left-width:4px;border-radius:6px}
+details[data-sev="crit"]{border-left-color:var(--crit)}
+details[data-sev="high"]{border-left-color:var(--high)}
+details[data-sev="med"]{border-left-color:var(--med)}
+details[data-sev="low"]{border-left-color:var(--low)}
+summary{cursor:pointer;padding:11px 14px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary .t{font-weight:600;flex:1 1 300px}
+summary .loc{font:400 .78rem var(--mono);color:var(--muted)}
+.sev{font:500 .68rem var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:3px}
+.sev.crit{background:var(--crit-soft);color:var(--crit)} .sev.high{background:var(--high-soft);color:var(--high)}
+.sev.med{background:var(--med-soft);color:var(--med)} .sev.low{background:var(--low-soft);color:var(--low)}
+.sev.fixed{background:var(--good-soft);color:var(--good)}
+details[data-state="fixed"]{border-left-color:var(--good)}
+details[data-state="fixed"] summary .t{color:var(--muted)}
+details .body{padding:0 14px 14px;display:grid;gap:8px;font-size:.92rem;color:var(--muted)}
+details .body strong{color:var(--ink);font-weight:600}
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.status div{display:flex;gap:8px;align-items:baseline;font-size:.92rem}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;transform:translateY(1px)}
+.dot.ok{background:var(--good)} .dot.wip{background:var(--high)} .dot.no{background:var(--crit)}
+footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+@media (max-width:520px){ .steps li{grid-template-columns:40px 1fr} .ring{padding:10px} }
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">Project overview · Python 3.11 · Docker · FastAPI · OpenAI tool calling</span>
+  <h1>agent-sandbox</h1>
+  <p class="lede">A containment layer for autonomous coding agents. The agent can read files, write files and run shell commands — and every command runs in a fresh, throwaway container that cannot reach the network and cannot outgrow its resource budget.</p>
+  <div class="limits" aria-label="Default container limits">
+    <span>network <b>none</b></span><span>mem <b>256m</b></span><span>swap <b>0</b></span>
+    <span>cpu <b>1.0</b></span><span>pids <b>64</b></span><span>caps <b>none</b></span><span>rootfs <b>read-only</b></span><span>user <b>non-root</b></span><span>runtime <b>gVisor</b></span><span>timeout <b>15s</b></span>
+  </div>
+</header>
+
+<section id="isolation">
+  <span class="eyebrow">Isolation boundary</span>
+  <h2>Where a command actually runs</h2>
+  <p>Each boundary sits inside the one before it. Files survive between commands through the bind-mounted workspace; processes do not — every <code>run_command</code> gets a new container that is removed afterwards.</p>
+  <div class="ring r1">
+    <div class="tag"><span>Host · API process (user “sandbox”) behind Caddy TLS</span><span>docker group access</span></div>
+    <div class="row">
+      <div class="box"><b>FastAPI gateway</b>per-tenant API keys, image allowlist, sessions bound to their tenant, idle TTL reaper (30 min)</div>
+      <div class="box"><b>AutonomousCodingAgent</b>OpenAI chat loop with 3 tools, max 6 iterations; tool errors go back to the model, output capped at 8,000 chars</div>
+      <div class="box"><b>SandboxedWorkspace</b>temp dir on host; every path resolved with realpath and kept inside the workspace</div>
+    </div>
+    <div class="ring r2">
+      <div class="tag"><span>Kernel boundary</span><span>gVisor runsc · required on the server, runc fallback locally</span></div>
+      <div class="ring r3">
+        <div class="tag"><span>Container · sandbox-base:latest</span><span>cgroups + netns · cap_drop ALL · no-new-privileges · read-only rootfs</span></div>
+        <div class="ring r4">
+          <div class="tag"><span>/workspace</span><span>bind mount · rw</span></div>
+          <div style="font-size:.9rem">The only writable places besides a 64 MB <code>/tmp</code>. Agent-edited files · test scripts · <code>.strace_summary</code> · hidden verification file (written after the agent stops)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="steps">
+  <span class="eyebrow">How it was built</span>
+  <h2>Five steps, each runnable on its own</h2>
+  <ol class="steps">
+    <li><div class="n">1<small>RUNNER</small></div><div><h3><code>step1_runner/runner.py</code></h3><p>Host subprocess with <code>shlex</code> argv, hard timeout, stdout/stderr capture, 127 on missing binary.</p></div></li>
+    <li><div class="n">2<small>CONTAINER</small></div><div><h3><code>step2_container/container_runner.py</code></h3><p>One ephemeral container per command with network disabled, RAM+swap pinned to 256 MB so the OOM killer fires, CFS CPU quota, PID limit against fork bombs, OOMKilled inspection.</p></div></li>
+    <li><div class="n">3<small>TRACING</small></div><div><h3><code>step3_tracing/tracer.py</code></h3><p>Wraps the command in <code>strace -f -c</code> with <code>SYS_PTRACE</code> and parses per-syscall counts for file, process and network calls.</p></div></li>
+    <li><div class="n">4<small>GVISOR</small></div><div><h3><code>step4_gvisor/gvisor_runner.py</code></h3><p>Detects the <code>runsc</code> runtime via <code>docker info</code> and uses gVisor's user-space kernel; falls back to <code>runc</code> when it isn't registered.</p></div></li>
+    <li><div class="n">5<small>AGENT</small></div><div><h3><code>step5_agent/</code></h3><p><code>SandboxedWorkspace</code> plus an OpenAI tool-calling agent that inspects, patches and re-runs tests until they pass. <code>demo.py</code> plants a broken Fibonacci and watches it heal.</p></div></li>
+  </ol>
+</section>
+
+<section id="loop">
+  <span class="eyebrow">Agent loop</span>
+  <h2>Inspect → patch → verify</h2>
+  <div class="loop" aria-label="Agent loop">
+    <span class="node">task prompt</span><span class="arrow">→</span>
+    <span class="node">LLM (gpt-4o-mini)</span><span class="arrow">→</span>
+    <span class="node hl">read_file · write_file · run_command</span><span class="arrow">→</span>
+    <span class="node">container output + [EXIT CODE]</span><span class="arrow">↺</span>
+    <span class="node">no tool call = final answer</span>
+  </div>
+</section>
+
+<section id="api">
+  <span class="eyebrow">REST API · src/api/server.py</span>
+  <h2>Session gateway</h2>
+  <p>All <code>/v1</code> routes require <code>X-API-Key</code>. Sessions idle longer than <code>SANDBOX_SESSION_TTL</code> (default 1800 s) are reaped every 60 s.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Input</th><th>Returns</th></tr></thead>
+    <tbody>
+      <tr><td><span class="verb">GET</span></td><td class="mono">/healthz</td><td>—</td><td>status, active session count</td></tr>
+      <tr><td><span class="verb">POST</span></td><td class="mono">/v1/sessions</td><td>template, metadata</td><td>201 · session_id <code>sbx_…</code></td></tr>
+      <tr><td><span class="verb">POST</span></td><td class="mono">/v1/sessions/{id}/write</td><td>path, content</td><td>403 on traversal</td></tr>
+      <tr><td><span class="verb">GET</span></td><td class="mono">/v1/sessions/{id}/read</td><td>?path=</td><td>path, content</td></tr>
+      <tr><td><span class="verb">POST</span></td><td class="mono">/v1/sessions/{id}/exec</td><td>command, timeout 1–60 s</td><td>combined stdout / stderr / exit code</td></tr>
+      <tr><td><span class="verb">DELETE</span></td><td class="mono">/v1/sessions/{id}</td><td>—</td><td>terminated, workspace wiped</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="evals">
+  <span class="eyebrow">Evaluation harness · run_evals.py</span>
+  <h2>Did the agent fix it, and did the sandbox hold?</h2>
+  <p>Each task seeds a workspace, lets the agent work, then drops in hidden tests the agent never saw.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Task</th><th>Type</th><th>Bug / attack</th><th>Hidden check</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">algo_reverse_words</td><td>functional</td><td><code>words[1:-1]</code> drops boundary words</td><td>single word, 4 words</td></tr>
+      <tr><td class="mono">math_safe_average</td><td>functional</td><td>ZeroDivisionError on <code>[]</code></td><td>empty list, float mean</td></tr>
+      <tr><td class="mono">arch_report_generator</td><td>functional</td><td>missing function in another module</td><td>2-item and empty list</td></tr>
+      <tr><td class="mono">security_network_exfil</td><td>adversarial</td><td>prompted to POST to an external host</td><td>HTTP to 1.1.1.1 must fail</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="deploy">
+  <span class="eyebrow">Deployment · terraform/</span>
+  <h2>One EC2 host, provisioned at boot</h2>
+  <p>Terraform zips only <code>src/</code>, the Dockerfile and requirements into a private S3 bucket, generates one API key per tenant and stores them as an SSM SecureString, and launches Ubuntu 22.04 with an instance role that can read just those two things.</p>
+  <div class="loop" aria-label="Boot sequence">
+    <span class="node">Docker CE</span><span class="arrow">→</span>
+    <span class="node">gVisor (sha512 verified)</span><span class="arrow">→</span>
+    <span class="node">code from S3</span><span class="arrow">→</span>
+    <span class="node">build sandbox-base</span><span class="arrow">→</span>
+    <span class="node hl">API as user “sandbox”, keys from SSM</span><span class="arrow">→</span>
+    <span class="node">Caddy :443</span>
+  </div>
+  <p>No SSH: shell access goes through SSM Session Manager. IMDSv2 only, encrypted root volume, port 443 limited to <code>allowed_ingress_cidrs</code>.</p>
+</section>
+
+<section id="review">
+  <span class="eyebrow">Code review · updated 3 Oct 2026</span>
+  <h2>Review status</h2>
+  <div class="verdict">
+    <div><h3>Fixed since the first review</h3><ul>
+      <li>Symlink escape to host files</li>
+      <li>Hard-coded keys, arbitrary images, open SSH</li>
+      <li>gVisor now on the agent/API path</li>
+      <li>API freezing during a running command</li>
+      <li>OOM kills never reported</li>
+      <li>Terraform that couldn't plan or deploy</li>
+      <li>One shared key → per-tenant keys, generated by Terraform</li>
+      <li>Writable container root filesystem</li>
+      <li>Agent loop crashing on tool errors or huge output</li>
+      <li>No tests → 58 pytest tests</li>
+    </ul></div>
+    <div><h3>Still open</h3><ul>
+      <li>No per-tenant session caps or rate limits</li>
+      <li>No disk quota on <code>/workspace</code></li>
+      <li>Evals: single runs; adversarial task tests the sandbox, not the agent</li>
+    </ul></div>
+  </div>
+
+  <div class="filters" role="group" aria-label="Filter findings by status">
+    <button type="button" id="f-all" data-f="all" aria-pressed="true">All</button>
+    <button type="button" id="f-open" data-f="open" aria-pressed="false">Open</button>
+    <button type="button" id="f-fixed" data-f="fixed" aria-pressed="false">Fixed</button>
+  </div>
+
+  <div class="findings">
+    <details data-sev="med" data-state="open" open><summary><span class="sev med">Medium</span><span class="t">No per-tenant session caps or rate limits</span><span class="loc">api/server.py</span></summary>
+      <div class="body"><p>Tenants are isolated from each other, but any tenant can create unlimited sessions and commands. Keys are read from an environment variable, so issuing one means a redeploy. <strong>Next:</strong> sessions-per-tenant cap (HTTP 429), requests-per-minute limit, keys hashed in a database.</p></div></details>
+
+    <details data-sev="med" data-state="open"><summary><span class="sev med">Medium</span><span class="t">No disk quota on /workspace</span><span class="loc">step5_agent/sandbox.py</span></summary>
+      <div class="body"><p>The root filesystem is now read-only and <code>/tmp</code> is capped at 64 MB, but <code>/workspace</code> is a host directory with no limit, so a command can still fill the host disk. <strong>Next:</strong> an XFS project quota or a size-limited loop-mounted volume per workspace.</p></div></details>
+
+    <details data-sev="med" data-state="open"><summary><span class="sev med">Medium</span><span class="t">Evals are a smoke test, not a benchmark</span><span class="loc">evals/</span></summary>
+      <div class="body"><p>Iteration counts and timeouts are now real. The adversarial task still passes whatever the agent does, and each task runs once. <strong>Next:</strong> run each task several times (pass@k) and record whether the agent tried the exfiltration.</p></div></details>
+
+    <details data-sev="low" data-state="open"><summary><span class="sev low">Low</span><span class="t">Smaller items</span><span class="loc">various</span></summary>
+      <div class="body"><p>A narrow race between the path check and the file open. <code>GVisorExecutionResult.is_sandboxed</code> is always true (the server now enforces gVisor separately). <code>runner.py:37</code> operator precedence. Partial logs dropped on timeout. <code>step2_container</code> duplicates <code>sandbox.py</code>. In-memory sessions are lost on redeploy.</p></div></details>
+
+    <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">One shared API key: every caller was the same tenant</span><span class="loc">api/server.py · terraform/</span></summary>
+      <div class="body"><p><code>SANDBOX_API_KEYS="acme:&lt;key&gt;,globex:&lt;key&gt;"</code> maps each key to a tenant, and sessions belong to tenants. The key is checked in constant time against every configured key, without stopping early. Terraform generates a 48-character key per name in <code>tenants</code>. Tests cover the parser and cross-tenant 403s on read, write, exec and delete.</p></div></details>
+
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Writable container root filesystem</span><span class="loc">step5_agent/sandbox.py</span></summary>
+      <div class="body"><p><code>read_only=True</code> with a 64 MB <code>noexec</code> tmpfs on <code>/tmp</code> and <code>HOME=/tmp</code>. Real-container tests check that writes to <code>/etc</code> fail and that <code>/tmp</code> fills up at its limit.</p></div></details>
+
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Agent loop crashed on tool errors; output unbounded</span><span class="loc">step5_agent/agent.py</span></summary>
+      <div class="body"><p>Any exception from a tool (blocked path, missing argument, Docker error) goes back to the model as the tool result. Output over 8,000 characters keeps its head and its tail, where errors and exit codes usually are. Tested with a scripted fake model.</p></div></details>
+
+    <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Symlink escape from the workspace to the host</span><span class="loc">step5_agent/sandbox.py</span></summary>
+      <div class="body"><p>Paths are resolved with <code>realpath</code> and must share the workspace root via <code>commonpath</code>. Tests cover links to host files and directories. On Docker Desktop for Windows, container-made links can't be followed by the host at all.</p></div></details>
+
+    <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Default keys, open ingress, arbitrary images</span><span class="loc">api/server.py · terraform/</span></summary>
+      <div class="body"><p>The server refuses to start without keys and compares in constant time. Terraform generates the keys, stores them in SSM, opens only 443 to your CIDRs, and has no SSH. Templates are allowlisted.</p></div></details>
+
+    <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Terraform could not plan, and would not have deployed</span><span class="loc">terraform/user_data.sh</span></summary>
+      <div class="body"><p><code>${ARCH}</code> collided with <code>templatefile</code>. The code was never copied to the host, and the service was never started. The script now renders and passes <code>bash -n</code>. Code ships from S3, the service runs as a non-root user behind Caddy TLS, and gVisor is checksum-verified and required.</p></div></details>
+
+    <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">One running command froze the whole API</span><span class="loc">api/server.py</span></summary>
+      <div class="body"><p>Async endpoints were calling blocking Docker code. Endpoints are sync again (FastAPI's thread pool) with a thread lock. A regression test checks that <code>/healthz</code> answers while a slow exec runs.</p></div></details>
+
+    <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">OOM kills were never reported</span><span class="loc">step5_agent/sandbox.py</span></summary>
+      <div class="body"><p><code>container.attrs</code> was a snapshot from creation; <code>container.reload()</code> now runs before reading <code>OOMKilled</code>. Covered by a real-container test.</p></div></details>
+
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Container hardening, tracer bugs, session sweeper, missing tests</span><span class="loc">various</span></summary>
+      <div class="body"><p><code>cap_drop=ALL</code> and <code>no-new-privileges</code>. Tracer quoting, exit code and column parsing, now unit-tested. The sweeper can no longer die silently. <code>python-dotenv</code> added. 58 tests across runner, paths, tracer, API, agent loop and real containers.</p></div></details>
+  </div>
+</section>
+
+<section id="status">
+  <span class="eyebrow">Status</span>
+  <h2>What's done</h2>
+  <div class="status">
+    <div><span class="dot ok"></span>Steps 1–5 implemented</div>
+    <div><span class="dot ok"></span>FastAPI gateway, hardened</div>
+    <div><span class="dot ok"></span>pytest suite (58 tests)</div>
+    <div><span class="dot ok"></span>Terraform validates and renders</div>
+    <div><span class="dot wip"></span>Not yet applied to a real AWS account</div>
+    <div><span class="dot ok"></span>Per-tenant API keys</div>
+    <div><span class="dot wip"></span>Session caps and rate limits</div>
+    <div><span class="dot no"></span>Python SDK and web console</div>
+  </div>
+</section>
+
+<footer>Reflects the working tree on 3 Oct 2026 (on top of commit <span class="mono">204c24b</span>). See README.md for setup and usage.</footer>
+</div>
+
+<script>
+(function(){
+  var btns=document.querySelectorAll('.filters button');
+  var items=document.querySelectorAll('.findings details');
+  btns.forEach(function(b){
+    b.addEventListener('click',function(){
+      var f=b.getAttribute('data-f');
+      btns.forEach(function(x){x.setAttribute('aria-pressed',String(x===b));});
+      items.forEach(function(d){d.hidden=!(f==='all'||d.getAttribute('data-state')===f);});
+    });
+  });
+})();
+</script>
