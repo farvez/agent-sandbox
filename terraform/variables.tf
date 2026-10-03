@@ -5,9 +5,9 @@ variable "aws_region" {
 }
 
 variable "instance_type" {
-  description = "EC2 compute instance size"
+  description = "EC2 instance size (x86_64). c7i-flex.large = 2 vCPU / 4 GB and is eligible on the AWS Free plan."
   type        = string
-  default     = "t3.medium"
+  default     = "c7i-flex.large"
 }
 
 variable "tenants" {

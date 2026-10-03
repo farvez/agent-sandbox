@@ -1,10 +1,15 @@
 import json
 import os
+import ssl
 import urllib.request
 import urllib.error
 
 BASE_URL = os.getenv("SANDBOX_API_URL", "http://127.0.0.1:8000")
 API_KEY = os.environ["SANDBOX_API_KEY"]
+
+# SANDBOX_API_INSECURE=1 skips TLS verification, for a deployment without a domain
+# (Caddy's self-signed certificate). Never use it against a server with a real domain.
+SSL_CONTEXT = ssl._create_unverified_context() if os.getenv("SANDBOX_API_INSECURE") == "1" else None
 
 
 def request(method: str, path: str, body: dict = None):
@@ -16,7 +21,7 @@ def request(method: str, path: str, body: dict = None):
     data = json.dumps(body).encode("utf-8") if body else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, context=SSL_CONTEXT, timeout=90) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

@@ -219,7 +219,7 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
   <p>Terraform zips only <code>src/</code>, the Dockerfile and requirements into a private S3 bucket, generates one API key per tenant and stores them as an SSM SecureString, and launches Ubuntu 22.04 with an instance role that can read just those two things.</p>
   <div class="loop" aria-label="Boot sequence">
     <span class="node">Docker CE</span><span class="arrow">→</span>
-    <span class="node">gVisor (sha512 verified)</span><span class="arrow">→</span>
+    <span class="node">gVisor (signed apt repo)</span><span class="arrow">→</span>
     <span class="node">code from S3</span><span class="arrow">→</span>
     <span class="node">build sandbox-base</span><span class="arrow">→</span>
     <span class="node hl">API as user “sandbox”, keys from SSM</span><span class="arrow">→</span>
@@ -286,7 +286,7 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
       <div class="body"><p>The server refuses to start without keys and compares in constant time. Terraform generates the keys, stores them in SSM, opens only 443 to your CIDRs, and has no SSH. Templates are allowlisted.</p></div></details>
 
     <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Terraform could not plan, and would not have deployed</span><span class="loc">terraform/user_data.sh</span></summary>
-      <div class="body"><p><code>${ARCH}</code> collided with <code>templatefile</code>. The code was never copied to the host, and the service was never started. The script now renders and passes <code>bash -n</code>. Code ships from S3, the service runs as a non-root user behind Caddy TLS, and gVisor is checksum-verified and required.</p></div></details>
+      <div class="body"><p><code>${ARCH}</code> collided with <code>templatefile</code>. The code was never copied to the host, and the service was never started. The script now renders and passes <code>bash -n</code>. Code ships from S3, the service runs as a non-root user behind Caddy TLS, and gVisor comes from its signed apt repository and is required.</p></div></details>
 
     <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">One running command froze the whole API</span><span class="loc">api/server.py</span></summary>
       <div class="body"><p>Async endpoints were calling blocking Docker code. Endpoints are sync again (FastAPI's thread pool) with a thread lock. A regression test checks that <code>/healthz</code> answers while a slow exec runs.</p></div></details>

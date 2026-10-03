@@ -169,9 +169,9 @@ Symlink tests need Linux, or Developer Mode on Windows; they skip otherwise.
 
 ## Deploy to AWS
 
-`terraform/` provisions a VPC, one EC2 instance (Ubuntu 22.04, t3.medium by default),
+`terraform/` provisions a VPC, one EC2 instance (Ubuntu 22.04, c7i-flex.large by default — 2 vCPU / 4 GB, eligible on the AWS Free plan),
 a private S3 bucket holding the code bundle, one generated API key per tenant (stored
-together as an SSM SecureString), and an instance role. At boot the host installs Docker, a checksum-verified gVisor, AWS CLI
+together as an SSM SecureString), and an instance role. At boot the host installs Docker, gVisor from its signed apt repository, AWS CLI
 and Caddy; builds `sandbox-base:latest` from this repo's Dockerfile; and runs the API
 as a non-root `sandbox` user behind Caddy on port 443, with `SANDBOX_REQUIRE_GVISOR=1`.
 

@@ -34,17 +34,17 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
 
-# 4. gVisor (runsc), checksum-verified, registered with Docker
+# 4. gVisor (runsc) from its official apt repository; apt verifies the package
+#    signature. (Standalone runsc binaries are no longer published under latest/.)
 echo "=== Installing gVisor (runsc) ==="
-GVISOR_URL="https://storage.googleapis.com/gvisor/releases/release/latest/$ARCH"
-mkdir -p /tmp/gvisor && cd /tmp/gvisor
-curl -fsSLO "$GVISOR_URL/runsc"
-curl -fsSLO "$GVISOR_URL/runsc.sha512"
-sha512sum -c runsc.sha512
-install -m 0755 runsc /usr/local/bin/runsc
-/usr/local/bin/runsc install   # adds the runsc runtime to /etc/docker/daemon.json
+curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+  > /etc/apt/sources.list.d/gvisor.list
+apt-get update -y
+apt-get install -y runsc
+runsc install   # adds the runsc runtime to /etc/docker/daemon.json
 systemctl restart docker
-cd /
+docker info --format '{{json .Runtimes}}' | grep -q runsc   # fail provisioning if not registered
 
 # 5. Application code from the private S3 bundle
 mkdir -p "$APP_DIR"

@@ -13,3 +13,5 @@ venv/
 *.tfvars
 .terraform.lock.hcl.bak
 terraform/.build/
+tfplan
+*.tfplan
