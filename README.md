@@ -170,7 +170,7 @@ gives Claude Code, Claude Desktop or any MCP client a sandbox as tools: `run_com
 `write_file`, `read_file`, `list_files`, `egress_log`, `sandbox_info`, `reset_sandbox`.
 
 ```bash
-claude mcp add --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi airlock -- airlock-sandbox-mcp
+claude mcp add airlock --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi -- airlock-sandbox-mcp
 ```
 
 One session per server process, created on first use and deleted on disconnect. MCP

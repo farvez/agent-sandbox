@@ -91,12 +91,14 @@ pip install "airlock-sandbox[mcp]"
 **Claude Code:**
 
 ```bash
-claude mcp add --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi airlock -- airlock-sandbox-mcp
+claude mcp add airlock --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi -- airlock-sandbox-mcp
 ```
 
 Add `-e SANDBOX_API_INSECURE=1` if the server uses a self-signed certificate. With
 [uv](https://docs.astral.sh/uv/) you can skip the install and use
 `-- uvx --from "airlock-sandbox[mcp]" airlock-sandbox-mcp` as the command instead.
+Put the server name (`airlock`) right after `add`: `-e` takes several values and would
+otherwise swallow the name. If `uvx` reports an old version, run it once with `--refresh`.
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
