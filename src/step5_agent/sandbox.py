@@ -217,6 +217,10 @@ class SandboxedWorkspace:
             warnings = []
             if oom_killed:
                 warnings.append("Process killed by cgroups (Memory limit exceeded).")
+            elif exit_code == 137:
+                # SIGKILL. We only kill on timeout (handled above), so this is almost always
+                # the memory limit; Docker doesn't always set OOMKilled (seen on cgroup v2 hosts).
+                warnings.append("Process was killed (exit 137, SIGKILL), most likely for exceeding the memory limit.")
             used = self.disk_usage_bytes()
             if used > self.quota_bytes:
                 warnings.append(

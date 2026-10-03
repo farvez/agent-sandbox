@@ -122,7 +122,7 @@ SHELL_ATTACKS = [
      15, lambda o: "unreachable" in o.lower() or "error" in o.lower(), "network_mode=none"),
     ("Memory bomb", "allocate until the host runs out of RAM",
      "python3 -c \"b=[]\nwhile True: b.append(' '*10**7)\"",
-     30, lambda o: "Memory limit exceeded" in o, "256 MB cgroup, no swap"),
+     30, lambda o: "memory limit" in o.lower(), "256 MB cgroup, no swap"),
     # Hard-stopped by the kernel quota on the server ("Disk quota exceeded");
     # elsewhere the workspace reports going over its quota.
     ("Fill the disk", "write until the server's disk is full",

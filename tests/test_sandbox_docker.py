@@ -34,9 +34,15 @@ def test_network_is_blocked(workspace):
 
 
 def test_oom_kill_is_detected(workspace):
-    """Regression: stale container.attrs meant OOM kills were never reported."""
-    out = workspace.run_command("python3 -c \"b = []\nwhile True: b.append(' ' * 10**7)\"", timeout_seconds=30)
-    assert "Memory limit exceeded" in out
+    """The caller is told a memory bomb was killed for memory.
+
+    Docker's OOMKilled flag (read after container.reload(); a stale attrs snapshot
+    once hid it) is not set reliably on every cgroup v2 host, e.g. GitHub's runners,
+    so an unexplained exit 137 is reported as the probable memory limit as well.
+    """
+    result = workspace.execute("python3 -c \"b = []\nwhile True: b.append(' ' * 10**7)\"", timeout_seconds=30)
+    assert result["exit_code"] == 137 and not result["timed_out"]
+    assert any("memory limit" in w.lower() for w in result["warnings"])
 
 
 def test_timeout_kills_container(workspace):
