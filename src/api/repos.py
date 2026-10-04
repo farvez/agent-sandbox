@@ -167,7 +167,9 @@ def import_archive(workspace, repo: RepoRef, archive: bytes, dest: str) -> dict:
         f"trap 'rm -f -- {q_tar}' EXIT\n"
         f"if [ -e {q_dest} ] || [ -L {q_dest} ]; then echo 'already exists' >&2; exit 17; fi\n"
         f"mkdir -p -- {q_dest} || exit 1\n"
-        f"tar -xzf {q_tar} -C {q_dest} --strip-components=1 --no-same-owner --no-same-permissions || exit 1\n"
+        # GNU tar refuses members with '..' (and fails); remove the partial folder so a retry works.
+        f"tar -xzf {q_tar} -C {q_dest} --strip-components=1 --no-same-owner --no-same-permissions "
+        f"|| {{ rm -rf -- {q_dest}; exit 1; }}\n"
         f"find {q_dest} -type f | wc -l\n"
     )
     try:

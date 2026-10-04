@@ -230,15 +230,29 @@ def test_archive_file_never_follows_a_planted_symlink(sandbox, outside_dir, monk
 
 @pytest.mark.docker
 @requires_docker
-def test_import_in_a_real_sandbox_contains_hostile_paths():
+def test_import_in_a_real_sandbox():
+    from src.step5_agent.sandbox import SandboxedWorkspace
+
+    with SandboxedWorkspace() as ws:
+        result = import_archive(ws, RepoRef("o", "r"), make_tar({"ok.py": "print('fine')", "pkg/a.txt": "a"}), "r")
+        assert result["files"] == 2 and result["path"] == "/workspace/r"
+        assert ws.run_command("python r/ok.py").startswith("[STDOUT]:\nfine")
+        assert not any(n.startswith(".airlock-import-") for n in os.listdir(ws.workspace_dir))
+
+
+@pytest.mark.docker
+@requires_docker
+def test_hostile_archive_is_refused_and_leaves_nothing_behind():
     from src.step5_agent.sandbox import SandboxedWorkspace
 
     hostile = make_tar({"ok.py": "print('fine')", "../../escape.txt": "x"}, top="repo-main")
     with SandboxedWorkspace() as ws:
         parent = os.path.dirname(ws.workspace_dir)
         before = set(os.listdir(parent))
-        result = import_archive(ws, RepoRef("o", "r"), hostile, "r")
-        assert result["files"] >= 1
-        assert ws.run_command("python r/ok.py").startswith("[STDOUT]:\nfine")
-        assert set(os.listdir(parent)) == before                  # nothing landed next to the workspace
-        assert not any(n.startswith(".airlock-import-") for n in os.listdir(ws.workspace_dir))
+        with pytest.raises(RepoImportError, match="contains '..'") as e:
+            import_archive(ws, RepoRef("o", "r"), hostile, "r")
+        assert e.value.status == 422
+        assert set(os.listdir(parent)) == before                   # nothing landed next to the workspace
+        assert os.listdir(ws.workspace_dir) == []                   # no partial folder, no archive
+        # ...so a retry with a good archive works instead of hitting "already exists".
+        assert import_archive(ws, RepoRef("o", "r"), make_tar({"ok.py": "1"}), "r")["files"] == 1
