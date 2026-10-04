@@ -83,6 +83,10 @@ Provisioning takes about 8 minutes. Outputs include `api_endpoint`, `console_url
 - **Egress:** `egress_policy` (default `{}`: no internet for anyone) is written to
   `/etc/agent-sandbox/egress-policy.json`; logs are in `/var/lib/agent-sandbox/egress/`.
   Docker's address pool is widened to `10.210.0.0/16` in /24s (256 concurrent egress sessions).
+- **Audit log:** a DynamoDB table (`agent-sandbox-audit`, deletion protection on, TTL after
+  `audit_retention_days`, default 90) holds each tenant's command history.
+- **Operator emails:** new invite requests are published to the alerts SNS topic, so they reach
+  `alert_email` alongside alarms.
 - Keys are also stored in Terraform state; keep state private.
 
 ## Monitoring

@@ -57,19 +57,26 @@ class FakeSessions:
         self.calls.append(("create", tenant, egress))
         return self.sessions[sid]
 
-    def run(self, tenant, sid, command, timeout):
+    def run(self, tenant, sid, command, timeout, actor=None, audit_command=None):
         self._owned(tenant, sid)
         self._check()
         self.calls.append(("run", sid, command, timeout))
+        self.last_actor, self.last_audit_command = actor, audit_command
         return {"stdout": f"{self.stdout}\n{CWD_MARKER}/workspace/repo\n", "stderr": "", "exit_code": 0,
                 "timed_out": False, "oom_killed": False, "warnings": []}
 
-    def import_repo(self, tenant, sid, repo, ref, path):
+    def import_repo(self, tenant, sid, repo, ref, path, actor=None):
         self._owned(tenant, sid)
         self._check()
         self.calls.append(("import", sid, repo, ref, path))
         return {"repo": repo, "ref": ref or "HEAD", "path": f"/workspace/{path or repo.split('/')[-1]}",
                 "dest": path or repo.split("/")[-1], "files": 3, "archive_bytes": 100}
+
+    def close_all(self, tenant):
+        mine = [sid for sid, s in self.sessions.items() if s["tenant_id"] == tenant]
+        for sid in mine:
+            del self.sessions[sid]
+        return len(mine)
 
     def destroy(self, tenant, sid):
         self._owned(tenant, sid)
@@ -147,7 +154,7 @@ def test_failed_import_still_opens_the_workspace(console):
     client, sessions, csrf = console
     original = sessions.import_repo
 
-    def broken(*a):
+    def broken(*a, **kw):
         raise HTTPException(404, "o/private@HEAD wasn't found. Only public repositories can be imported for now.")
 
     sessions.import_repo = broken
@@ -277,3 +284,10 @@ def test_wrapped_commands_behave_like_a_shell(tmp_path):
     assert run("echo 'it''s' \"$((1+2))\"", cwd)[0] == "its 3\n"
     assert run("cd /nonexistent-dir; true", str(tmp_path))[1] == str(tmp_path)   # failed cd keeps the directory
     assert run("exit 3", cwd)[2] == 3
+
+
+def test_terminal_commands_are_audited_as_typed_by_the_signed_in_user(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf)
+    client.post(f"/console/workspaces/{sid}/exec", headers={"X-CSRF-Token": csrf}, json={"command": "ls -la"})
+    assert sessions.last_actor == "console @Farvez" and sessions.last_audit_command == "ls -la"

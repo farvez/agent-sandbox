@@ -4,6 +4,7 @@ Items are addressed by a string key:
     user#<github_id>              a console user and the tenant they own
     invite#<github_login>         permission to sign up (invite-only mode)
     request#<github_login>        a signed-in GitHub user asking for an invite
+    block#<github_login>          access removed by an admin: no sign-in, no requests
     usage#<tenant>#<YYYY-MM>      monthly counters: sessions, commands, command_seconds
 
 Backends (SANDBOX_ACCOUNTS): dynamodb:<table> on the server, sqlite:<path> locally.
@@ -153,6 +154,25 @@ class AccountStore:
 
     def list_users(self) -> List[dict]:
         return self._items.prefix("user#")
+
+    def delete_user(self, github_id: int) -> None:
+        self._items.delete(f"user#{github_id}")
+
+    # ---------------------------------------------------------------- blocks
+
+    def block(self, login: str, blocked_by: str, tenant_id: Optional[str] = None) -> dict:
+        record = {"login": login.lower(), "blocked_by": blocked_by, "blocked_at": self._clock(), "tenant_id": tenant_id}
+        self._items.put(f"block#{login.lower()}", record)
+        return record
+
+    def unblock(self, login: str) -> None:
+        self._items.delete(f"block#{login.lower()}")
+
+    def is_blocked(self, login: str) -> bool:
+        return self._items.get(f"block#{login.lower()}") is not None
+
+    def list_blocked(self) -> List[dict]:
+        return self._items.prefix("block#")
 
     # ---------------------------------------------------------------- invites
 

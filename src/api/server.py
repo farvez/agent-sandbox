@@ -16,6 +16,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from src.api.accounts import AccountStore
+from src.api.audit import AuditLog
 from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKey
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
@@ -104,6 +105,29 @@ def record_usage(tenant_id: str, **counters: float) -> None:
         ACCOUNTS.record_usage(tenant_id, **counters)
     except Exception:
         logger.exception("Usage metering failed for %s", tenant_id)
+# Per-tenant command audit log (optional): every exec and import, never the output.
+AUDIT = AuditLog.from_config(os.getenv("SANDBOX_AUDIT"), region=os.getenv("AWS_REGION"),
+                             retention_days=int(os.getenv("SANDBOX_AUDIT_RETENTION_DAYS", "90")))
+
+
+def record_audit(tenant_id: str, **entry) -> None:
+    """Auditing, like metering, must never fail a request."""
+    if AUDIT is None:
+        return
+    try:
+        AUDIT.record(tenant_id, **entry)
+    except Exception:
+        logger.exception("Audit logging failed for %s", tenant_id)
+
+
+def actor_for_key(header_key: Optional[str]) -> str:
+    """Which credential ran something, without revealing it: the key id of a self-service
+    key (asb_<id>_<secret>), or "static key" for one from configuration."""
+    if header_key and header_key.startswith("asb_") and header_key.count("_") >= 2:
+        return f"key {header_key.split('_')[1][:16]}"
+    return "static key"
+
+
 LIMITS = LimitTracker(load_tenant_limits(os.getenv("SANDBOX_TENANT_LIMITS"), os.getenv("SANDBOX_TENANT_LIMITS_FILE")))
 
 SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))
@@ -328,28 +352,41 @@ def start_session(tenant_id: str, template: str = "sandbox-base:latest",
     return rec
 
 
-def run_in_session(rec: SessionRecord, command: str, timeout_seconds: int) -> dict:
+def run_in_session(rec: SessionRecord, command: str, timeout_seconds: int,
+                   actor: str = "api", audit_command: Optional[str] = None) -> dict:
+    """`audit_command` is what the user typed when `command` wraps it (the console terminal)."""
     with LIMITS.running_command(rec.tenant_id):  # 429 when too many are already running
         started = time.monotonic()
         result = rec.workspace.execute(command=command, timeout_seconds=timeout_seconds)
-    record_usage(rec.tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
+    elapsed = round(time.monotonic() - started, 3)
+    record_usage(rec.tenant_id, commands=1, command_seconds=elapsed)
+    record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="exec",
+                 command=audit_command if audit_command is not None else command,
+                 exit_code=result["exit_code"], duration_s=elapsed,
+                 timed_out=result["timed_out"], oom_killed=result["oom_killed"])
     return result
 
 
-def import_repo_into(rec: SessionRecord, repo: str, ref: Optional[str] = None, path: Optional[str] = None) -> dict:
+def import_repo_into(rec: SessionRecord, repo: str, ref: Optional[str] = None, path: Optional[str] = None,
+                     actor: str = "api") -> dict:
     """Downloads a public GitHub repository and unpacks it into the session's workspace."""
+    described = f"import {repo}" + (f" @{ref}" if ref else "") + (f" into {path}" if path else "")
+    started = time.monotonic()
     try:
         parsed = parse_repo(repo, ref)
         dest = clean_destination(path, parsed)
         archive = fetch_archive(parsed)
         with LIMITS.running_command(rec.tenant_id):
-            started = time.monotonic()
             result = import_archive(rec.workspace, parsed, archive, dest)
-    except RepoImportError as e:
-        raise HTTPException(status_code=e.status, detail=str(e))
-    except QuotaExceededError as e:
-        raise HTTPException(status_code=413, detail=str(e))
-    record_usage(rec.tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
+    except (RepoImportError, QuotaExceededError) as e:
+        status_code = e.status if isinstance(e, RepoImportError) else 413
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="import", command=described,
+                     duration_s=round(time.monotonic() - started, 3), detail=f"failed ({status_code}): {e}"[:300])
+        raise HTTPException(status_code=status_code, detail=str(e))
+    elapsed = round(time.monotonic() - started, 3)
+    record_usage(rec.tenant_id, commands=1, command_seconds=elapsed)
+    record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="import", command=described,
+                 exit_code=0, duration_s=elapsed, detail=f"{result.get('files', 0)} files into {result.get('path', '')}")
     return result
 
 
@@ -364,6 +401,18 @@ def end_session(session_id: str, tenant_id: str) -> None:
 
     rec.workspace.cleanup()
     LIMITS.close_session(tenant_id)
+
+
+def close_tenant_sessions(tenant_id: str) -> int:
+    """Closes every open session of a tenant (an admin removing its access). Returns how many."""
+    closed = 0
+    for rec in tenant_sessions(tenant_id):
+        try:
+            end_session(rec.session_id, tenant_id)
+            closed += 1
+        except HTTPException:
+            pass   # already gone
+    return closed
 
 
 def tenant_sessions(tenant_id: str) -> List[SessionRecord]:
@@ -517,21 +566,35 @@ def read_file(session_id: str, path: str, tenant_id: str = Security(authorize)):
 
 
 @app.post("/v1/sessions/{session_id}/exec", response_model=RunCommandResponse)
-def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize)):
+def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize),
+                header_key: Optional[str] = Security(api_key_header)):
     rec = get_authorized_session(session_id, tenant_id)
-    result = run_in_session(rec, request.command, request.timeout_seconds)
+    result = run_in_session(rec, request.command, request.timeout_seconds, actor=actor_for_key(header_key))
     return RunCommandResponse(command=request.command, output=format_result(result), **result)
 
 
 @app.post("/v1/sessions/{session_id}/import")
-def import_repo(session_id: str, request: ImportRepoRequest, tenant_id: str = Security(authorize)):
+def import_repo(session_id: str, request: ImportRepoRequest, tenant_id: str = Security(authorize),
+                header_key: Optional[str] = Security(api_key_header)):
     """Imports a public GitHub repository into /workspace/<path> (default: the repo name).
 
     The server downloads the archive (size-capped) and it is unpacked inside the
     sandbox, within the workspace disk quota. The session needs no egress for this.
     """
     rec = get_authorized_session(session_id, tenant_id)
-    return import_repo_into(rec, request.repo, request.ref, request.path)
+    return import_repo_into(rec, request.repo, request.ref, request.path, actor=actor_for_key(header_key))
+
+
+@app.get("/v1/audit")
+def audit_log(limit: int = 100, before: Optional[str] = None, tenant_id: str = Security(authorize)):
+    """This tenant's command history, newest first: commands and outcomes, never output.
+    Pass `next` back as `before` for the next page."""
+    if AUDIT is None:
+        raise HTTPException(status_code=501, detail="The audit log is not enabled on this server (SANDBOX_AUDIT).")
+    entries, cursor = AUDIT.list(tenant_id, limit, before)
+    hidden = {"sk", "expires_at"}
+    return {"tenant_id": tenant_id, "entries": [{k: v for k, v in e.items() if k not in hidden} for e in entries],
+            "next": cursor, "retention_days": AUDIT.retention_days}
 
 
 @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -559,17 +622,37 @@ class ConsoleSessions:
         LIMITS.check_rate(tenant_id)
         return start_session(tenant_id, egress_request=egress).summary()
 
-    def run(self, tenant_id: str, session_id: str, command: str, timeout_seconds: int) -> dict:
+    def run(self, tenant_id: str, session_id: str, command: str, timeout_seconds: int,
+            actor: str = "console", audit_command: Optional[str] = None) -> dict:
         LIMITS.check_rate(tenant_id)
-        return run_in_session(get_authorized_session(session_id, tenant_id), command, timeout_seconds)
+        return run_in_session(get_authorized_session(session_id, tenant_id), command, timeout_seconds,
+                              actor=actor, audit_command=audit_command)
 
-    def import_repo(self, tenant_id: str, session_id: str, repo: str, ref: Optional[str], path: Optional[str]) -> dict:
+    def import_repo(self, tenant_id: str, session_id: str, repo: str, ref: Optional[str], path: Optional[str],
+                    actor: str = "console") -> dict:
         LIMITS.check_rate(tenant_id)
-        return import_repo_into(get_authorized_session(session_id, tenant_id), repo, ref, path)
+        return import_repo_into(get_authorized_session(session_id, tenant_id), repo, ref, path, actor=actor)
 
     def destroy(self, tenant_id: str, session_id: str) -> None:
         LIMITS.check_rate(tenant_id)
         end_session(session_id, tenant_id)
+
+    def close_all(self, tenant_id: str) -> int:
+        return close_tenant_sessions(tenant_id)
+
+
+def sns_notifier(topic_arn: Optional[str]):
+    """(subject, message) -> None, publishing to an SNS topic (its email subscribers get it)."""
+    if not topic_arn:
+        return None
+    import boto3
+
+    client = boto3.client("sns", region_name=os.getenv("AWS_REGION"))
+
+    def notify(subject: str, message: str) -> None:
+        client.publish(TopicArn=topic_arn, Subject=subject[:100], Message=message)
+
+    return notify
 
 
 CONSOLE = ConsoleConfig.from_env()
@@ -586,6 +669,8 @@ if CONSOLE is not None:
         limits=lambda tenant: LIMITS.usage(tenant),
         egress=tenant_egress,
         sessions=ConsoleSessions(),
+        audit=lambda: AUDIT,
+        notify=sns_notifier(os.getenv("SANDBOX_NOTIFY_TOPIC_ARN")),
     ))
 
     @app.get("/", include_in_schema=False)

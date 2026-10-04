@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% set active = 'activity' %}
+{% block title %}Activity · Airlock console{% endblock %}
+{% block content %}
+<h1>Activity</h1>
+<p class="muted">Every command run in {% if own %}your{% else %}<code>{{ target }}</code>'s{% endif %} sandboxes, newest first:
+  from the API, the SDK, Claude Code (MCP) and the browser terminal. Commands and outcomes only, never their output.
+  Kept for {{ retention_days }} days.</p>
+
+{% if entries %}
+<div class="table-wrap"><table class="activity">
+  <thead><tr><th>When</th><th>Command</th><th class="hide-md">Session</th><th class="hide-sm">By</th><th>Result</th></tr></thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td class="when"><time data-ts="{{ e.ts }}">{{ e.ts | int }}</time></td>
+      <td class="cmd"><code>{% if e.kind == 'import' %}{{ e.command }}{% else %}$ {{ e.command }}{% endif %}</code>{% if e.truncated %} <span class="muted small">(shortened)</span>{% endif %}{% if e.detail %}<div class="muted small">{{ e.detail }}</div>{% endif %}</td>
+      <td class="hide-md"><code title="{{ e.session_id }}">{{ e.session_id }}</code></td>
+      <td class="hide-sm">{{ e.actor }}</td>
+      <td class="result">
+        {% if e.timed_out %}<span class="pill warn">timed out</span>
+        {% elif e.oom_killed %}<span class="pill warn">out of memory</span>
+        {% elif e.exit_code is none %}<span class="pill bad">failed</span>
+        {% elif e.exit_code == 0 %}<span class="pill ok">exit 0</span>
+        {% else %}<span class="pill bad">exit {{ e.exit_code }}</span>{% endif %}
+        {% if e.duration_s is not none %}<span class="muted small">{{ '%.1f' | format(e.duration_s) }} s</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="pager">
+  {% if not first_page %}<a class="button" href="/console/activity{% if not own %}?tenant={{ target }}{% endif %}">Newest</a>{% endif %}
+  {% if cursor %}<a class="button" href="/console/activity?before={{ cursor }}{% if not own %}&amp;tenant={{ target }}{% endif %}">Older</a>{% endif %}
+</p>
+{% else %}
+<p class="muted">{% if first_page %}No commands yet. Run something from a <a href="/console/workspaces">workspace</a>, the SDK or Claude Code and it shows up here.{% else %}No older entries.{% endif %}</p>
+{% endif %}
+{% endblock %}

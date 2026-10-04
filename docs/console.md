@@ -38,8 +38,20 @@ commands count toward usage like API calls.
 - **Invite requests:** someone who signs in with GitHub without an invite can request one
   (optional use case and contact). Requests are tied to the verified GitHub account (a signed,
   30-minute cookie carries it), one per account, at most 500 waiting. Admins see a count on the
-  **Admin** tab and approve or dismiss each one; approving invites that username. The console
-  sends no messages, so tell people when they're in.
+  **Admin** tab and approve or dismiss each one; approving invites that username. Each new
+  request also emails the operator (the alert email, via `SANDBOX_NOTIFY_TOPIC_ARN`); the
+  console sends nothing to the requester, so tell people when they're in.
+- **Removing access:** **Remove** on a user (Admin → Users) revokes all their API keys, closes
+  their open sandboxes, ends their console sign-in immediately (every request checks the
+  account still exists) and blocks the GitHub username from signing in or requesting again.
+  Usage history and the audit log are kept. **Unblock** lets them request access again.
+  Console admins can't be removed from the page.
+- **Activity:** every command run in a tenant's sandboxes — API, SDK, MCP, browser terminal and
+  repo imports — with time, session, who ran it (the API key's id or `console @login`), exit
+  code, duration, timeout/out-of-memory, newest first. Commands only, never output; kept for
+  `audit_retention_days` (90). Admins can open any tenant's activity from the Users table.
+  Commands are stored as typed, so a secret pasted into a command line is kept too; write
+  secrets to a file (`write_file`) instead of putting them in commands.
 - **Usage metering:** every session and command is counted per tenant per month
   (`SANDBOX_ACCOUNTS`, the same table as accounts and invites) — the basis for free-plan
   quotas and paid plans later.

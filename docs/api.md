@@ -23,6 +23,7 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | GET/POST | `/v1/admin/keys` | `?tenant=` / `{tenant, name?}` | admin key only: list all / issue for any tenant |
 | DELETE | `/v1/admin/keys/{key_id}` | — | admin key only: revoke any key |
 | GET | `/v1/usage` | — | `{tenant_id, limits, sessions_open, commands_running, requests_available}` |
+| GET | `/v1/audit` | `?limit=` (≤500) `&before=` | `{tenant_id, entries: [{ts, session_id, actor, kind, command, exit_code, duration_s, timed_out, oom_killed, detail}], next, retention_days}` — this tenant's command history, newest first; pass `next` as `before` for older entries · `501` when disabled |
 
 `exec` output is plain text with `[STDOUT]:`, `[STDERR]:`, `[WARNING]:` (OOM kill or over disk quota),
 `[TIMEOUT]:` and a final `[EXIT CODE]: n` line. Allowed templates: `sandbox-base:latest`, `python:3.11-slim`.
@@ -93,6 +94,9 @@ the client) shows a tenant its limits and current usage; client errors carry
 | `SANDBOX_EGRESS_LOG_DIR` | system temp dir | Where proxies write `<session_id>.jsonl` |
 | `SANDBOX_EGRESS_DNS` | detected | Comma-separated DNS servers for the proxies (default: host's non-loopback nameservers) |
 | `SANDBOX_IMPORT_MAX_MB` | `100` | Largest GitHub archive `/import` downloads |
+| `SANDBOX_AUDIT` | unset | `dynamodb:<table>` (key `tenant` + sort key `sk`, TTL on `expires_at`) or `sqlite:<path>`: enables the command audit log |
+| `SANDBOX_AUDIT_RETENTION_DAYS` | `90` | Days audit entries are kept |
+| `SANDBOX_NOTIFY_TOPIC_ARN` | unset | SNS topic for operator notices (new invite requests) |
 | `SANDBOX_ACCOUNTS` | unset | `dynamodb:<table>` or `sqlite:<path>`: console accounts, invites and usage metering |
 | `SANDBOX_CONSOLE_BASE_URL`, `SANDBOX_GITHUB_CLIENT_ID`, `SANDBOX_GITHUB_CLIENT_SECRET`, `SANDBOX_CONSOLE_SECRET` | unset | All four enable the [console](console.md) |
 | `SANDBOX_CONSOLE_ADMINS`, `SANDBOX_CONSOLE_SIGNUP` | —, `invite` | Console admins (GitHub logins) and sign-up mode |

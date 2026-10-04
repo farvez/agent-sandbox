@@ -137,6 +137,7 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_console_workspaces.py` | Workspaces: start with/without internet, import on create, limits shown, tenant isolation, terminal exec (cwd tracking, CSRF header, validation, JSON errors), import, close; the cwd wrapper under real bash |
 | `tests/test_repos.py` | Repo import: names and refs, destination checks, size cap, 404 message, redirects only to GitHub, unpack flow and cleanup, 409/413/422, planted-symlink refusal; real-container import and a hostile `../` archive |
 | `tests/test_keystore.py` | Key store on SQLite and DynamoDB (moto): hash-only storage, immediate revocation, tenant isolation, limits, last-key guard |
+| `tests/test_audit.py` | Audit log on SQLite and DynamoDB (moto): newest-first order, tenant isolation, pagination, command cap, expired entries hidden |
 | `tests/test_accounts.py` | Accounts, invites and usage counters on SQLite and DynamoDB (moto), including concurrent increments |
 | `tests/test_limits.py` | Limits config, token bucket with a fake clock, session and running-command limits |
 | `tests/test_sdk.py` | The SDK against the real API over HTTP: lifecycle, results, files, every error type, retries with `Retry-After`, agent tools, repo import |

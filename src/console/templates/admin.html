@@ -75,14 +75,22 @@
   <h2>Users</h2>
   {% if users %}
   <div class="table-wrap"><table>
-    <thead><tr><th>User</th><th>Tenant</th><th>Joined</th><th>Last sign-in</th></tr></thead>
+    <thead><tr><th>User</th><th>Tenant</th><th class="hide-sm">Joined</th><th class="hide-sm">Last sign-in</th><th></th></tr></thead>
     <tbody>
     {% for u in users %}
       <tr>
         <td>@{{ u.login }}</td>
         <td><code>{{ u.tenant_id }}</code></td>
-        <td><time data-ts="{{ u.created_at }}">{{ u.created_at | int }}</time></td>
-        <td><time data-ts="{{ u.last_login_at }}">{{ u.last_login_at | int }}</time></td>
+        <td class="hide-sm"><time data-ts="{{ u.created_at }}">{{ u.created_at | int }}</time></td>
+        <td class="hide-sm"><time data-ts="{{ u.last_login_at }}">{{ u.last_login_at | int }}</time></td>
+        <td class="actions">
+          {% if audit_enabled %}<a class="button" href="/console/activity?tenant={{ u.tenant_id }}">Activity</a>{% endif %}
+          {% if u.login | lower in admins %}<span class="pill">admin</span>{% else %}
+          <form method="post" action="/console/admin/users/{{ u.github_id }}/remove" data-confirm="Remove @{{ u.login }}? Their API keys are revoked, open sandboxes closed, and they can't sign in again unless you unblock them.">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button danger" type="submit">Remove</button>
+          </form>{% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
@@ -91,4 +99,29 @@
   <p class="muted">No users yet.</p>
   {% endif %}
 </section>
+
+{% if blocked %}
+<section>
+  <h2>Removed</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>GitHub user</th><th class="hide-sm">Removed by</th><th class="hide-sm">When</th><th></th></tr></thead>
+    <tbody>
+    {% for b in blocked %}
+      <tr>
+        <td><code>@{{ b.login }}</code></td>
+        <td class="hide-sm">@{{ b.blocked_by }}</td>
+        <td class="hide-sm"><time data-ts="{{ b.blocked_at }}">{{ b.blocked_at | int }}</time></td>
+        <td class="actions">
+          <form method="post" action="/console/admin/blocked/{{ b.login }}/unblock">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button" type="submit">Unblock</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Removed people can't sign in or request access. Unblocking lets them request again; invite them to let them straight back in.</p>
+</section>
+{% endif %}
 {% endblock %}

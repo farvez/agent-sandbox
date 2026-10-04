@@ -26,6 +26,9 @@ CONSOLE_SIGNUP="${console_signup}"
 DOMAIN="${domain_name}"
 TLS_STATE_S3="${tls_state_s3}"
 ACME_EMAIL="${acme_email}"
+AUDIT_TABLE="${audit_table}"
+AUDIT_RETENTION_DAYS="${audit_retention_days}"
+NOTIFY_TOPIC_ARN="${notify_topic_arn}"
 CADDY_DATA=/var/lib/caddy/.local/share/caddy
 SESSION_TTL="${session_ttl_secs}"
 EGRESS_LOG_DIR=/var/lib/agent-sandbox/egress
@@ -181,6 +184,9 @@ Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
 Environment=SANDBOX_TENANT_LIMITS_FILE=/etc/agent-sandbox/tenant-limits.json
 Environment=SANDBOX_KEYSTORE=dynamodb:$KEYS_TABLE
 Environment=SANDBOX_ACCOUNTS=dynamodb:$ACCOUNTS_TABLE
+Environment=SANDBOX_AUDIT=dynamodb:$AUDIT_TABLE
+Environment=SANDBOX_AUDIT_RETENTION_DAYS=$AUDIT_RETENTION_DAYS
+Environment=SANDBOX_NOTIFY_TOPIC_ARN=$NOTIFY_TOPIC_ARN
 Environment=AWS_REGION=$AWS_REGION
 Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
 ExecStart=$APP_DIR/start.sh

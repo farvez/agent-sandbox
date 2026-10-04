@@ -86,6 +86,17 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "audit_retention_days" {
+  description = "Days the per-tenant command audit log keeps entries (DynamoDB TTL deletes older ones)."
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.audit_retention_days >= 1 && var.audit_retention_days <= 3650
+    error_message = "audit_retention_days must be between 1 and 3650."
+  }
+}
+
 variable "acme_email" {
   description = "Contact email for TLS certificates (Let's Encrypt expiry notices). Setting it also lets Caddy fall back to ZeroSSL when Let's Encrypt refuses, e.g. its 5-certificates-per-week limit."
   type        = string

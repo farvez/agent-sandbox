@@ -116,7 +116,7 @@ form.stack { display: grid; gap: 14px; margin-top: 10px; }
 .field input { max-width: 520px; }
 .check { display: flex; gap: 10px; align-items: flex-start; }
 .check input { flex: none; margin-top: 5px; }
-td.actions { display: flex; gap: 8px; justify-content: flex-end; }
+td.actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
 .heading-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .heading-row p { margin-bottom: 2px; }
 .title-code { font-size: 1.3rem; background: none; padding: 0; }
@@ -160,3 +160,17 @@ details.import form.inline { margin: 12px 0 6px; }
 textarea { font: inherit; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface);
            color: var(--ink); width: 100%; max-width: 520px; resize: vertical; box-sizing: border-box; }
 td.note { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 360px; }
+
+/* Activity */
+table.activity td { vertical-align: top; }
+td.when { white-space: nowrap; color: var(--muted); font-size: .85rem; }
+td.cmd code { white-space: pre-wrap; overflow-wrap: anywhere; background: none; padding: 0; }
+td.cmd { max-width: 520px; }
+td.result { white-space: nowrap; }
+td.result .pill { margin-right: 6px; }
+.pill.bad { background: var(--danger-soft); color: var(--danger); }
+.pill.warn { background: #fdf0d5; color: #8a5a00; }
+@media (prefers-color-scheme: dark) { .pill.warn { background: #3a2c10; color: #f2c46d; } }
+.pager { display: flex; gap: 10px; margin-top: 14px; }
+td.cmd { min-width: 220px; }
+@media (max-width: 960px) { .hide-md { display: none; } }

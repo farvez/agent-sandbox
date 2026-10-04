@@ -87,6 +87,8 @@ def build_console_router(
     egress: Callable,            # (tenant) -> list of allowed hosts
     github: Optional[GitHubOAuth] = None,
     sessions=None,               # ConsoleSessions (server.py); None hides the workspace pages
+    audit: Optional[Callable] = None,    # () -> AuditLog or None; None hides the Activity page
+    notify: Optional[Callable] = None,   # (subject, message) -> None, e.g. email to the operator
 ) -> APIRouter:
     router = APIRouter(prefix="/console", include_in_schema=False)
     signer = Signer(config.session_secret)
@@ -97,7 +99,27 @@ def build_console_router(
     # ------------------------------------------------------------------ helpers
 
     def session_of(request: Request) -> Optional[dict]:
-        return signer.loads(request.cookies.get(SESSION_COOKIE))
+        """The signed-in session, as long as the account still exists (an admin can remove it)."""
+        if not hasattr(request.state, "console_session"):
+            session = signer.loads(request.cookies.get(SESSION_COOKIE))
+            if session is not None and accounts().get_user(session["gid"]) is None:
+                session = None
+            request.state.console_session = session
+        return request.state.console_session
+
+    def audit_log():
+        return audit() if audit is not None else None
+
+    def send_notice(subject: str, message: str) -> None:
+        """Best effort: a failed email never fails the request."""
+        if notify is None:
+            return
+        try:
+            notify(subject, message)
+        except Exception:
+            import logging
+
+            logging.getLogger("agent_sandbox.console").exception("Notification failed: %s", subject)
 
     def is_admin(session: dict) -> bool:
         return session["login"].lower() in config.admins
@@ -109,6 +131,7 @@ def build_console_router(
         response = TEMPLATES.TemplateResponse(request, template, {
             "session": session, "is_admin": admin,
             "base_url": config.base_url, "workspaces_enabled": sessions is not None,
+            "audit_enabled": audit_log() is not None,
             "pending_requests": len(accounts().list_requests()) if admin else 0,
             "flash": flash, **context,
         }, status_code=status_code)
@@ -185,6 +208,12 @@ def build_console_router(
             return render(request, "message.html", 502, title="Sign-in failed",
                           message="GitHub didn't confirm the sign-in. Please try again.")
         login_lower = gh["login"].lower()
+        if accounts().is_blocked(login_lower) and login_lower not in config.admins:
+            response = render(request, "message.html", 403, title="Access removed", session=None, is_admin=False,
+                              pending_requests=0, message=f"@{gh['login']} no longer has access to this console.")
+            response.delete_cookie(STATE_COOKIE, path="/console")
+            response.delete_cookie(SESSION_COOKIE, path="/console")
+            return response
         allowed = (login_lower in config.admins or config.signup == "open"
                    or accounts().get_user(gh["id"]) is not None or accounts().is_invited(login_lower))
         if not allowed:
@@ -227,14 +256,24 @@ def build_console_router(
         from src.api.accounts import RequestsFull
 
         pending = signer.loads(request.cookies.get(PENDING_COOKIE))
-        if pending is None or not secrets.compare_digest(csrf, pending.get("csrf", "")):
+        if pending is None or not secrets.compare_digest(csrf, pending.get("csrf", "")) \
+                or accounts().is_blocked(pending["login"]):
             return render(request, "message.html", 400, title="Sign in again",
                           message="This form expired. Sign in with GitHub again to request an invite.")
+        is_new = accounts().get_request(pending["login"]) is None
+        note, contact = note.strip()[:NOTE_MAX], contact.strip()[:CONTACT_MAX]
         try:
-            accounts().request_invite(pending["gid"], pending["login"], pending["name"], pending["avatar"],
-                                      note.strip()[:NOTE_MAX], contact.strip()[:CONTACT_MAX])
+            accounts().request_invite(pending["gid"], pending["login"], pending["name"], pending["avatar"], note, contact)
         except RequestsFull as e:
             return invite_page(request, pending, 503, error=str(e))
+        if is_new:   # one email per person, not per edit
+            login = pending["login"]
+            await run_in_threadpool(send_notice, f"Airlock: invite request from @{login}", (
+                f"@{login} ({pending['name']}) asked for an invite to the Airlock console.\n\n"
+                f"Use case: {note or '(not given)'}\n"
+                f"Contact:  {contact or '(not given)'}\n"
+                f"GitHub:   https://github.com/{login}\n\n"
+                f"Approve or dismiss: {config.base_url}/console/admin\n"))
         return set_flash(redirect("/console/request-invite"), "ok",
                          "Request sent. You'll be able to sign in once it's approved.")
 
@@ -286,7 +325,8 @@ def build_console_router(
 
     def admin_view(request: Request, error: Optional[str] = None):
         return render(request, "admin.html", invites=accounts().list_invites(), users=accounts().list_users(),
-                      requests=accounts().list_requests(), signup=config.signup, error=error)
+                      requests=accounts().list_requests(), blocked=accounts().list_blocked(),
+                      admins=config.admins, signup=config.signup, error=error)
 
     @router.get("/admin", response_class=HTMLResponse)
     @guarded
@@ -327,6 +367,40 @@ def build_console_router(
         accounts().delete_request(login)
         return set_flash(redirect("/console/admin"), "ok", f"Dismissed the request from @{login}.")
 
+    @router.post("/admin/users/{github_id}/remove")
+    @guarded
+    async def remove_user(request: Request, github_id: int, csrf: str = Form("")):
+        """Removes an account: keys revoked, sandboxes closed, console sign-in ended, and blocked
+        from signing in or requesting again until unblocked. Usage history is kept."""
+        session = require(request, csrf, admin=True)
+        user = accounts().get_user(github_id)
+        if user is None:
+            return set_flash(redirect("/console/admin"), "error", "That account no longer exists.")
+        login, tenant = user["login"], user["tenant_id"]
+        if login.lower() in config.admins:
+            raise _Forbidden("Console admins can't be removed here; take them out of console_admins first.")
+        revoked = 0
+        for key in keystore().list(tenant):
+            if key.active:
+                keystore().revoke(key.key_id, tenant_id=tenant, keep_one=False)
+                revoked += 1
+        closed = await run_in_threadpool(sessions.close_all, tenant) if sessions is not None else 0
+        accounts().block(login, blocked_by=session["login"], tenant_id=tenant)
+        accounts().uninvite(login)
+        accounts().delete_request(login)
+        accounts().delete_user(github_id)
+        return set_flash(redirect("/console/admin"), "ok",
+                         f"Removed @{login}: {revoked} key(s) revoked, {closed} sandbox(es) closed. "
+                         "They can't sign in or request access again unless you unblock them.")
+
+    @router.post("/admin/blocked/{login}/unblock")
+    @guarded
+    async def unblock(request: Request, login: str, csrf: str = Form("")):
+        require(request, csrf, admin=True)
+        accounts().unblock(login)
+        return set_flash(redirect("/console/admin"), "ok",
+                         f"Unblocked @{login}. They can request access again, or invite them to let them straight in.")
+
     @router.post("/admin/invites/{login}/delete", response_class=HTMLResponse)
     @guarded
     async def delete_invite(request: Request, login: str, csrf: str = Form("")):
@@ -334,6 +408,22 @@ def build_console_router(
         accounts().uninvite(login)
         return redirect("/console/admin")
 
+
+    # ------------------------------------------------------------------ activity (command audit log)
+
+    @router.get("/activity", response_class=HTMLResponse)
+    @guarded
+    async def activity(request: Request, before: str = "", tenant: str = ""):
+        session = require(request)
+        log = audit_log()
+        if log is None:
+            return render(request, "message.html", 404, title="Not available",
+                          message="The activity log isn't enabled on this server.")
+        # Admins can look at any tenant (e.g. to investigate abuse); everyone else sees their own.
+        target = tenant.strip() if tenant.strip() and is_admin(session) else session["tid"]
+        entries, cursor = await run_in_threadpool(log.list, target, 100, before or None)
+        return render(request, "activity.html", entries=entries, cursor=cursor, target=target,
+                      own=target == session["tid"], retention_days=log.retention_days, first_page=not before)
 
     # ------------------------------------------------------------------ workspaces: sessions, repo import, terminal
 
@@ -387,7 +477,7 @@ def build_console_router(
         if repo.strip():
             try:
                 result = await run_in_threadpool(sessions.import_repo, tenant, created["session_id"],
-                                                 repo, ref.strip() or None, None)
+                                                 repo, ref.strip() or None, None, actor=f"console @{session['login']}")
                 set_flash(response, "ok", f"Imported {result['repo']} ({result['files']} files) into {result['path']}.")
                 response.headers["location"] += f"?cwd={result['path']}"
             except Exception as e:
@@ -436,7 +526,8 @@ def build_console_router(
         if len(command) > MAX_COMMAND_CHARS:
             return json_response(400, {"error": f"Commands are limited to {MAX_COMMAND_CHARS} characters."})
         try:
-            result = await run_in_threadpool(sessions.run, session["tid"], session_id, wrap_command(command, cwd), timeout)
+            result = await run_in_threadpool(sessions.run, session["tid"], session_id, wrap_command(command, cwd), timeout,
+                                             actor=f"console @{session['login']}", audit_command=command)
         except Exception as e:
             status_code, message = failure(e)
             return json_response(status_code, {"error": message})
@@ -458,7 +549,7 @@ def build_console_router(
             return json_response(400, {"error": "Malformed request."})
         try:
             result = await run_in_threadpool(sessions.import_repo, session["tid"], session_id,
-                                             repo, ref or None, path or None)
+                                             repo, ref or None, path or None, actor=f"console @{session['login']}")
         except Exception as e:
             status_code, message = failure(e)
             return json_response(status_code, {"error": message})

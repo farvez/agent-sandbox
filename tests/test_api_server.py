@@ -564,3 +564,76 @@ def test_imports_are_metered_as_commands(client, monkeypatch, tmp_path):
     sid = create(client)
     assert client.post(f"/v1/sessions/{sid}/import", json={"repo": "a/b"}, headers=AUTH).status_code == 200
     assert store.usage("acme")["commands"] == 1
+
+
+# ------------------------------------------------------------------ command audit log
+
+@pytest.fixture
+def audit(monkeypatch, tmp_path):
+    from src.api.audit import AuditLog, _SqliteAudit
+
+    log = AuditLog(_SqliteAudit(str(tmp_path / "audit.db")))
+    monkeypatch.setattr(server, "AUDIT", log)
+    return log
+
+
+def test_commands_are_audited_with_the_key_that_ran_them(client, audit):
+    sid = create(client)
+    client.post(f"/v1/sessions/{sid}/exec", json={"command": "echo hi"}, headers=AUTH)
+    entries = client.get("/v1/audit", headers=AUTH).json()["entries"]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["command"] == "echo hi" and e["session_id"] == sid and e["exit_code"] == 0
+    assert e["actor"] == "static key" and e["kind"] == "exec" and "sk" not in e and "expires_at" not in e
+
+
+def test_self_service_key_id_is_recorded_never_the_secret(client, audit):
+    assert server.actor_for_key("asb_k3y1d_s3cretpart") == "key k3y1d"
+    assert server.actor_for_key("plain-static-key") == "static key"
+    assert server.actor_for_key(None) == "static key"
+
+
+def test_audit_is_per_tenant(client, audit):
+    sid = create(client)
+    client.post(f"/v1/sessions/{sid}/exec", json={"command": "acme only"}, headers=AUTH)
+    assert client.get("/v1/audit", headers=OTHER_TENANT).json()["entries"] == []
+
+
+def test_imports_are_audited_including_failures(client, audit, monkeypatch):
+    from src.api.repos import RepoImportError
+
+    monkeypatch.setattr(server, "fetch_archive", lambda repo: b"tgz")
+    monkeypatch.setattr(server, "import_archive", lambda ws, repo, archive, dest: {"files": 3, "path": f"/workspace/{dest}"})
+    sid = create(client)
+    client.post(f"/v1/sessions/{sid}/import", json={"repo": "psf/requests", "ref": "main"}, headers=AUTH)
+
+    def missing(repo):
+        raise RepoImportError("not found", 404)
+
+    monkeypatch.setattr(server, "fetch_archive", missing)
+    client.post(f"/v1/sessions/{sid}/import", json={"repo": "a/private"}, headers=AUTH)
+    failed, ok = client.get("/v1/audit", headers=AUTH).json()["entries"]
+    assert ok["command"] == "import psf/requests @main" and ok["exit_code"] == 0 and "3 files" in ok["detail"]
+    assert failed["command"] == "import a/private" and failed["exit_code"] is None and "404" in failed["detail"]
+
+
+def test_audit_failure_never_fails_the_command(client, monkeypatch):
+    class Broken:
+        def record(self, *a, **k):
+            raise RuntimeError("dynamodb down")
+
+    monkeypatch.setattr(server, "AUDIT", Broken())
+    sid = create(client)
+    assert client.post(f"/v1/sessions/{sid}/exec", json={"command": "ls"}, headers=AUTH).status_code == 200
+
+
+def test_audit_endpoint_reports_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(server, "AUDIT", None)
+    assert client.get("/v1/audit", headers=AUTH).status_code == 501
+
+
+def test_closing_all_of_a_tenants_sessions(client):
+    a, b = create(client), create(client)
+    other = client.post("/v1/sessions", json={}, headers=OTHER_TENANT).json()["session_id"]
+    assert server.close_tenant_sessions("acme") == 2
+    assert other in server.active_sessions and a not in server.active_sessions and b not in server.active_sessions
