@@ -1,4 +1,4 @@
-from src.step3_tracing.tracer import parse_strace_summary
+from examples.learning.step3_tracing.tracer import parse_strace_summary
 
 SUMMARY_WITH_ERRORS = """\
 % time     seconds  usecs/call     calls    errors syscall

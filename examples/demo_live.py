@@ -8,15 +8,20 @@
 Needs SANDBOX_API_URL and SANDBOX_API_KEY (plus SANDBOX_API_INSECURE=1 for a
 self-signed certificate). Act 2 also needs OPENAI_API_KEY; skip it with --skip-agent.
 
-    python demo_live.py
-    python demo_live.py --skip-agent
-    python demo_live.py --act 3
+    python examples/demo_live.py
+    python examples/demo_live.py --skip-agent
+    python examples/demo_live.py --act 3
 
 Act 4 needs the tenant's egress policy to include "pypi".
 """
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, so `src` and `evals` import
+
 import argparse
 import os
-import sys
 import time
 
 from dotenv import load_dotenv
@@ -81,7 +86,7 @@ def act_agent() -> None:
         console.print("[yellow]OPENAI_API_KEY not set; skipping Act 2.[/yellow]")
         return
 
-    from src.step5_agent.agent import AutonomousCodingAgent
+    from src.agent.agent import AutonomousCodingAgent
 
     with Sandbox() as sbx:
         sbx.write_file("math_lib.py", BROKEN_LIB)

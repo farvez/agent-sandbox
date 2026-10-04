@@ -12,7 +12,7 @@ os.environ["SANDBOX_API_KEY"] = TENANT_KEYS["default"]
 # acme may use PyPI and one API; globex has no internet; default may use anything under example.com.
 os.environ["SANDBOX_EGRESS_POLICY"] = '{"acme": ["pypi", "api.openai.com"], "default": ["*.example.com"]}'
 
-from src.step5_agent.sandbox import SandboxedWorkspace
+from src.sandbox.workspace import SandboxedWorkspace
 
 
 def make_offline_workspace() -> SandboxedWorkspace:

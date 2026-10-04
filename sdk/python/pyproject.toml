@@ -35,6 +35,8 @@ airlock-sandbox-keys = "airlock_sandbox.keys:main"
 Homepage = "https://github.com/farvez/agent-sandbox"
 Source = "https://github.com/farvez/agent-sandbox/tree/main/sdk/python"
 Issues = "https://github.com/farvez/agent-sandbox/issues"
+Changelog = "https://github.com/farvez/agent-sandbox/blob/main/sdk/python/CHANGELOG.md"
+Documentation = "https://github.com/farvez/agent-sandbox/blob/main/sdk/python/README.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "airlock_sandbox.__version__" }

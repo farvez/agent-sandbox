@@ -2,7 +2,7 @@
 import json
 from types import SimpleNamespace
 
-from src.step5_agent.agent import MAX_TOOL_OUTPUT_CHARS, AutonomousCodingAgent, truncate_tool_output
+from src.agent.agent import MAX_TOOL_OUTPUT_CHARS, AutonomousCodingAgent, truncate_tool_output
 
 
 def tool_call(call_id, name, arguments):

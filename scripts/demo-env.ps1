@@ -1,5 +1,5 @@
-# Points this PowerShell window at the deployed sandbox API, for demo_live.py,
-# test_api.py and the Python client. Run it "dot-sourced" so the variables stay set:
+# Points this PowerShell window at the deployed sandbox API, for examples\demo_live.py,
+# scripts\smoke_test.py and the Python client. Run it "dot-sourced" so the variables stay set:
 #
 #     . .\scripts\demo-env.ps1              # tenant "default"
 #     . .\scripts\demo-env.ps1 -Tenant acme
@@ -41,4 +41,4 @@ if ($Admin) {
     Write-Host "Admin key   : loaded ($($adminKey.Length) chars) - airlock-sandbox-keys --admin list"
 }
 Write-Host ""
-Write-Host "Next: .venv\Scripts\python demo_live.py   (or --skip-agent / --act 1..4)"
+Write-Host "Next: .venv\Scripts\python examples\demo_live.py   (or --skip-agent / --act 1..4)"

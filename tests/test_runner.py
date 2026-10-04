@@ -1,6 +1,6 @@
 import sys
 
-from src.step1_runner.runner import run_command
+from examples.learning.step1_runner.runner import run_command
 
 # Quote the interpreter path: shlex.split runs in POSIX mode, and Windows paths
 # contain backslashes and sometimes spaces.

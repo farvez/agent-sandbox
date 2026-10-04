@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.step5_agent.sandbox import SandboxedWorkspace
+    from src.sandbox.workspace import SandboxedWorkspace
 
 OPENAI_SANDBOX_TOOLS = [
     {

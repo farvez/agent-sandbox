@@ -231,7 +231,7 @@ def test_archive_file_never_follows_a_planted_symlink(sandbox, outside_dir, monk
 @pytest.mark.docker
 @requires_docker
 def test_import_in_a_real_sandbox():
-    from src.step5_agent.sandbox import SandboxedWorkspace
+    from src.sandbox.workspace import SandboxedWorkspace
 
     with SandboxedWorkspace() as ws:
         result = import_archive(ws, RepoRef("o", "r"), make_tar({"ok.py": "print('fine')", "pkg/a.txt": "a"}), "r")
@@ -243,7 +243,7 @@ def test_import_in_a_real_sandbox():
 @pytest.mark.docker
 @requires_docker
 def test_hostile_archive_is_refused_and_leaves_nothing_behind():
-    from src.step5_agent.sandbox import SandboxedWorkspace
+    from src.sandbox.workspace import SandboxedWorkspace
 
     hostile = make_tar({"ok.py": "print('fine')", "../../escape.txt": "x"}, top="repo-main")
     with SandboxedWorkspace() as ws:

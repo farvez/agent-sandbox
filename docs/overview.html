@@ -161,11 +161,11 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
   <span class="eyebrow">How it was built</span>
   <h2>Five steps, each runnable on its own</h2>
   <ol class="steps">
-    <li><div class="n">1<small>RUNNER</small></div><div><h3><code>step1_runner/runner.py</code></h3><p>Host subprocess with <code>shlex</code> argv, hard timeout, stdout/stderr capture, 127 on missing binary.</p></div></li>
-    <li><div class="n">2<small>CONTAINER</small></div><div><h3><code>step2_container/container_runner.py</code></h3><p>One ephemeral container per command with network disabled, RAM+swap pinned to 256 MB so the OOM killer fires, CFS CPU quota, PID limit against fork bombs, OOMKilled inspection.</p></div></li>
-    <li><div class="n">3<small>TRACING</small></div><div><h3><code>step3_tracing/tracer.py</code></h3><p>Wraps the command in <code>strace -f -c</code> with <code>SYS_PTRACE</code> and parses per-syscall counts for file, process and network calls.</p></div></li>
-    <li><div class="n">4<small>GVISOR</small></div><div><h3><code>step4_gvisor/gvisor_runner.py</code></h3><p>Detects the <code>runsc</code> runtime via <code>docker info</code> and uses gVisor's user-space kernel; falls back to <code>runc</code> when it isn't registered.</p></div></li>
-    <li><div class="n">5<small>AGENT</small></div><div><h3><code>step5_agent/</code></h3><p><code>SandboxedWorkspace</code> plus an OpenAI tool-calling agent that inspects, patches and re-runs tests until they pass. <code>demo.py</code> plants a broken Fibonacci and watches it heal.</p></div></li>
+    <li><div class="n">1<small>RUNNER</small></div><div><h3><code>examples/learning/step1_runner/runner.py</code></h3><p>Host subprocess with <code>shlex</code> argv, hard timeout, stdout/stderr capture, 127 on missing binary.</p></div></li>
+    <li><div class="n">2<small>CONTAINER</small></div><div><h3><code>examples/learning/step2_container/container_runner.py</code></h3><p>One ephemeral container per command with network disabled, RAM+swap pinned to 256 MB so the OOM killer fires, CFS CPU quota, PID limit against fork bombs, OOMKilled inspection.</p></div></li>
+    <li><div class="n">3<small>TRACING</small></div><div><h3><code>examples/learning/step3_tracing/tracer.py</code></h3><p>Wraps the command in <code>strace -f -c</code> with <code>SYS_PTRACE</code> and parses per-syscall counts for file, process and network calls.</p></div></li>
+    <li><div class="n">4<small>GVISOR</small></div><div><h3><code>src/sandbox/gvisor.py</code></h3><p>Detects the <code>runsc</code> runtime via <code>docker info</code> and uses gVisor's user-space kernel; falls back to <code>runc</code> when it isn't registered.</p></div></li>
+    <li><div class="n">5<small>AGENT</small></div><div><h3><code>src/sandbox/workspace.py · src/agent/</code></h3><p><code>SandboxedWorkspace</code> plus an OpenAI tool-calling agent that inspects, patches and re-runs tests until they pass. <code>demo.py</code> plants a broken Fibonacci and watches it heal.</p></div></li>
   </ol>
 </section>
 
@@ -199,7 +199,7 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
 </section>
 
 <section id="evals">
-  <span class="eyebrow">Evaluation harness · run_evals.py</span>
+  <span class="eyebrow">Evaluation harness · scripts/run_evals.py</span>
   <h2>Did the agent fix it, and did the sandbox hold?</h2>
   <p>Each task seeds a workspace, lets the agent work, then drops in hidden tests the agent never saw.</p>
   <div class="tbl"><table>
@@ -263,7 +263,7 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
     <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">No per-tenant session caps or rate limits</span><span class="loc">api/limits.py</span></summary>
       <div class="body"><p>Per-tenant limits return 429: concurrent sessions (default 10), requests per minute (token bucket, default 120, with <code>Retry-After</code>) and concurrent commands (default 4). Configurable per tenant with <code>"*"</code> defaults; <code>GET /v1/usage</code> reports them. Live demo: grabbing every sandbox stops at 10.</p></div></details>
 
-    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">No disk quota on /workspace</span><span class="loc">step5_agent/workspace_pool.py · terraform/</span></summary>
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">No disk quota on /workspace</span><span class="loc">sandbox/workspace_pool.py · terraform/</span></summary>
       <div class="body"><p>Workspaces are pre-made slots on a size-capped ext4 filesystem with project quotas (512 MB each, 15 GB total), so neither one session nor all of them can fill the server's disk. Verified under gVisor: a 4 GB write stops at 512 MB with <code>Disk quota exceeded</code>. Elsewhere the workspace warns and refuses API writes once over quota.</p></div></details>
 
     <details data-sev="med" data-state="open"><summary><span class="sev med">Medium</span><span class="t">Evals are a smoke test, not a benchmark</span><span class="loc">evals/</span></summary>
@@ -275,13 +275,13 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
     <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">One shared API key: every caller was the same tenant</span><span class="loc">api/server.py · terraform/</span></summary>
       <div class="body"><p><code>SANDBOX_API_KEYS="acme:&lt;key&gt;,globex:&lt;key&gt;"</code> maps each key to a tenant, and sessions belong to tenants. The key is checked in constant time against every configured key, without stopping early. Terraform generates a 48-character key per name in <code>tenants</code>. Tests cover the parser and cross-tenant 403s on read, write, exec and delete.</p></div></details>
 
-    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Writable container root filesystem</span><span class="loc">step5_agent/sandbox.py</span></summary>
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Writable container root filesystem</span><span class="loc">sandbox/workspace.py</span></summary>
       <div class="body"><p><code>read_only=True</code> with a 64 MB <code>noexec</code> tmpfs on <code>/tmp</code> and <code>HOME=/tmp</code>. Real-container tests check that writes to <code>/etc</code> fail and that <code>/tmp</code> fills up at its limit.</p></div></details>
 
-    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Agent loop crashed on tool errors; output unbounded</span><span class="loc">step5_agent/agent.py</span></summary>
+    <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Agent loop crashed on tool errors; output unbounded</span><span class="loc">agent/agent.py</span></summary>
       <div class="body"><p>Any exception from a tool (blocked path, missing argument, Docker error) goes back to the model as the tool result. Output over 8,000 characters keeps its head and its tail, where errors and exit codes usually are. Tested with a scripted fake model.</p></div></details>
 
-    <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Symlink escape from the workspace to the host</span><span class="loc">step5_agent/sandbox.py</span></summary>
+    <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Symlink escape from the workspace to the host</span><span class="loc">sandbox/workspace.py</span></summary>
       <div class="body"><p>Paths are resolved with <code>realpath</code> and must share the workspace root via <code>commonpath</code>. Tests cover links to host files and directories. On Docker Desktop for Windows, container-made links can't be followed by the host at all.</p></div></details>
 
     <details data-sev="crit" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Default keys, open ingress, arbitrary images</span><span class="loc">api/server.py · terraform/</span></summary>
@@ -293,7 +293,7 @@ footer{padding-top:28px;border-top:1px solid var(--line);color:var(--muted);font
     <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">One running command froze the whole API</span><span class="loc">api/server.py</span></summary>
       <div class="body"><p>Async endpoints were calling blocking Docker code. Endpoints are sync again (FastAPI's thread pool) with a thread lock. A regression test checks that <code>/healthz</code> answers while a slow exec runs.</p></div></details>
 
-    <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">OOM kills were never reported</span><span class="loc">step5_agent/sandbox.py</span></summary>
+    <details data-sev="high" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">OOM kills were never reported</span><span class="loc">sandbox/workspace.py</span></summary>
       <div class="body"><p><code>container.attrs</code> was a snapshot from creation; <code>container.reload()</code> now runs before reading <code>OOMKilled</code>. Covered by a real-container test.</p></div></details>
 
     <details data-sev="med" data-state="fixed"><summary><span class="sev fixed">Fixed</span><span class="t">Container hardening, tracer bugs, session sweeper, missing tests</span><span class="loc">various</span></summary>

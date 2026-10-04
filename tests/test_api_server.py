@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 import src.api.server as server
 from src.api.limits import LimitTracker, load_tenant_limits
-from src.step5_agent.workspace_pool import WorkspaceCapacityError
+from src.sandbox.workspace_pool import WorkspaceCapacityError
 from tests.conftest import TENANT_KEYS, make_offline_workspace
 
 AUTH = {"X-API-Key": TENANT_KEYS["acme"]}

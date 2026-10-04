@@ -21,8 +21,8 @@ from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.api.repos import RepoImportError, clean_destination, fetch_archive, import_archive, parse_repo
-from src.step5_agent.sandbox import SandboxedWorkspace, format_result
-from src.step5_agent.workspace_pool import QuotaExceededError, WorkspaceCapacityError
+from src.sandbox.workspace import SandboxedWorkspace, format_result
+from src.sandbox.workspace_pool import QuotaExceededError, WorkspaceCapacityError
 
 
 

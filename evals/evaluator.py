@@ -3,8 +3,8 @@ import shutil
 import tempfile
 from typing import Optional
 from evals.schema import EvalTask, EvalReport
-from src.step5_agent.sandbox import SandboxedWorkspace
-from src.step5_agent.agent import AutonomousCodingAgent
+from src.sandbox.workspace import SandboxedWorkspace
+from src.agent.agent import AutonomousCodingAgent
 
 
 class BenchmarkEvaluator:

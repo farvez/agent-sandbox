@@ -21,3 +21,6 @@ dist/
 build/
 *.egg-info/
 terraform/backend.hcl
+
+# Internal notes kept locally, not published
+docs/positioning.html

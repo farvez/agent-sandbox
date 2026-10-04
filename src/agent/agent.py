@@ -4,8 +4,8 @@ from typing import Callable, List, Optional
 from openai import OpenAI
 from rich.console import Console
 
-from src.step5_agent.sandbox import SandboxedWorkspace
-from src.step5_agent.tools import OPENAI_SANDBOX_TOOLS, dispatch_tool_call
+from src.sandbox.workspace import SandboxedWorkspace
+from src.agent.tools import OPENAI_SANDBOX_TOOLS, dispatch_tool_call
 
 console = Console()
 

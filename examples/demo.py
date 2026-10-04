@@ -1,11 +1,15 @@
-import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, so `src` and `evals` import
+
+import os
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from src.step5_agent.sandbox import SandboxedWorkspace
-from src.step5_agent.agent import AutonomousCodingAgent
+from src.sandbox.workspace import SandboxedWorkspace
+from src.agent.agent import AutonomousCodingAgent
 from dotenv import load_dotenv
 load_dotenv()
 

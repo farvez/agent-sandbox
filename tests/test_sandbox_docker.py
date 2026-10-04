@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from src.step5_agent.sandbox import SandboxedWorkspace
+from src.sandbox.workspace import SandboxedWorkspace
 from tests.conftest import requires_docker
 
 pytestmark = [pytest.mark.docker, requires_docker]
@@ -199,7 +199,7 @@ def test_first_start_prunes_orphaned_networks_but_never_live_ones():
 
 
 def test_command_over_quota_warns_and_blocks_further_writes():
-    from src.step5_agent.workspace_pool import QuotaExceededError
+    from src.sandbox.workspace_pool import QuotaExceededError
 
     with SandboxedWorkspace(quota_mb=2) as ws:
         out = ws.run_command("head -c 5M /dev/zero > big.bin")

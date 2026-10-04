@@ -1,5 +1,9 @@
-import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, so `src` and `evals` import
+
+import os
 import time
 from rich.console import Console
 from rich.table import Table

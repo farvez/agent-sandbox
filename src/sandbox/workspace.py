@@ -7,8 +7,8 @@ import docker
 
 from src.egress.gateway import EgressGateway, EgressSession, get_gateway
 from src.egress.proxy import expand_rules
-from src.step4_gvisor.gvisor_runner import GVisorSandboxRunner
-from src.step5_agent.workspace_pool import QuotaExceededError, disk_usage, get_pool, quota_bytes_from_env
+from src.sandbox.gvisor import GVisorSandboxRunner
+from src.sandbox.workspace_pool import QuotaExceededError, disk_usage, get_pool, quota_bytes_from_env
 
 # Every container gets these. User installs land in the persistent workspace
 # (the root filesystem is read-only and /tmp is noexec, which breaks native wheels).

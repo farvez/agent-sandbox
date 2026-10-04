@@ -299,7 +299,7 @@ def test_handle_tool_call_truncates_keeping_the_end(sbx):
 def test_sdk_sandbox_plugs_into_the_repo_agent(sbx):
     """AutonomousCodingAgent only needs read_file / write_file / run_command."""
     from types import SimpleNamespace
-    from src.step5_agent.agent import AutonomousCodingAgent
+    from src.agent.agent import AutonomousCodingAgent
 
     call = SimpleNamespace(id="c1", function=SimpleNamespace(name="run_command", arguments='{"command": "pytest"}'))
     replies = [
