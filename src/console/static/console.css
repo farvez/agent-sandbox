@@ -148,3 +148,15 @@ details.import form.inline { margin: 12px 0 6px; }
 }
 .callout.soft { background: var(--surface); border-color: var(--line); }
 .term-input input::placeholder { color: #5f706a; }
+
+/* Invite requests */
+.badge { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
+         font-size: .72rem; font-weight: 700; line-height: 20px; text-align: center; vertical-align: 2px; }
+.request { max-width: 560px; margin: 24px auto 0; display: grid; gap: 14px; }
+.request .who { display: flex; align-items: center; gap: 14px; }
+.request .who img { border-radius: 50%; }
+.request .who p { margin: 0; }
+.request .login { font-weight: 700; font-size: 1.1rem; }
+textarea { font: inherit; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface);
+           color: var(--ink); width: 100%; max-width: 520px; resize: vertical; box-sizing: border-box; }
+td.note { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 360px; }

@@ -133,7 +133,7 @@ pytest -m "not docker" # fast unit tests only
 | File | Covers |
 |------|--------|
 | `tests/test_api_server.py` | Auth, tenant key parsing, cross-tenant isolation, template allowlist, egress policy and log endpoints, per-tenant 429s, usage, metering, session listing, repo import endpoint, slots freed on delete/expiry/failed start |
-| `tests/test_console.py` | Console with GitHub faked: sign-in and state check, invite-only access, admin invites, key create/show-once/revoke, CSRF, admin-only pages, tampered sessions, security headers |
+| `tests/test_console.py` | Console with GitHub faked: sign-in and state check, invite-only access, invite requests (verified identity, approve/dismiss, queue cap), admin invites, key create/show-once/revoke, CSRF, admin-only pages, tampered sessions, security headers |
 | `tests/test_console_workspaces.py` | Workspaces: start with/without internet, import on create, limits shown, tenant isolation, terminal exec (cwd tracking, CSRF header, validation, JSON errors), import, close; the cwd wrapper under real bash |
 | `tests/test_repos.py` | Repo import: names and refs, destination checks, size cap, 404 message, redirects only to GitHub, unpack flow and cleanup, 409/413/422, planted-symlink refusal; real-container import and a hostile `../` archive |
 | `tests/test_keystore.py` | Key store on SQLite and DynamoDB (moto): hash-only storage, immediate revocation, tenant isolation, limits, last-key guard |

@@ -6,6 +6,38 @@
 <p class="muted">Sign-up mode: <strong>{{ 'invite-only' if signup == 'invite' else 'open to anyone with GitHub' }}</strong>.</p>
 
 <section>
+  <h2>Invite requests{% if requests %} <span class="badge">{{ requests | length }}</span>{% endif %}</h2>
+  {% if requests %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>GitHub user</th><th>Use case</th><th class="hide-sm">Contact</th><th class="hide-sm">Asked</th><th></th></tr></thead>
+    <tbody>
+    {% for r in requests %}
+      <tr>
+        <td><a href="https://github.com/{{ r.login }}" rel="noopener noreferrer">@{{ r.display_login or r.login }}</a>{% if r.name and r.name != r.display_login %}<br><span class="muted small">{{ r.name }}</span>{% endif %}</td>
+        <td class="note">{{ r.note or '—' }}</td>
+        <td class="hide-sm">{{ r.contact or '—' }}</td>
+        <td class="hide-sm"><time data-ts="{{ r.requested_at }}">{{ r.requested_at | int }}</time></td>
+        <td class="actions">
+          <form method="post" action="/console/admin/requests/{{ r.login }}/approve">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button primary" type="submit">Approve</button>
+          </form>
+          <form method="post" action="/console/admin/requests/{{ r.login }}/dismiss" data-confirm="Dismiss the request from @{{ r.login }}?">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button" type="submit">Dismiss</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Approving invites their GitHub username. The console doesn't send messages, so let them know they can sign in.</p>
+  {% else %}
+  <p class="muted">No requests waiting. People who sign in without an invite can ask for one here.</p>
+  {% endif %}
+</section>
+
+<section>
   <h2>Invites</h2>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <form class="inline" method="post" action="/console/admin/invites">

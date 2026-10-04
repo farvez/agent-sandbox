@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Request an invite · Airlock console{% endblock %}
+{% block content %}
+<section class="request">
+  <div class="who">
+    {% if pending.avatar %}<img src="{{ pending.avatar }}" alt="" width="56" height="56">{% endif %}
+    <div>
+      <p class="muted small">Signed in with GitHub as</p>
+      <p class="login">@{{ pending.login }}</p>
+    </div>
+  </div>
+
+  {% if invited %}
+  <h1>You're invited</h1>
+  <p>@{{ pending.login }} has an invite now. Sign in again to create your account.</p>
+  <a class="button primary" href="/console/login">Sign in with GitHub</a>
+  {% elif existing %}
+  <h1>Your request is in</h1>
+  <p>@{{ pending.login }} isn't invited yet, and we have your request from
+    <time data-ts="{{ existing.requested_at }}">{{ existing.requested_at | int }}</time>.
+    Once it's approved, sign in again to create your account.</p>
+  {% else %}
+  <h1>Request an invite</h1>
+  <p>@{{ pending.login }} isn't invited yet. Airlock is in a free, invite-only preview while it gets
+    real-world use. Ask for an invite and we'll review it.</p>
+  {% endif %}
+
+  {% if not invited %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form class="stack" method="post" action="/console/request-invite">
+    <input type="hidden" name="csrf" value="{{ pending.csrf }}">
+    <div class="field">
+      <label for="note">What would you use it for? <span class="muted">(optional)</span></label>
+      <textarea id="note" name="note" rows="4" maxlength="{{ note_max }}" placeholder="e.g. running tests for a coding agent, trying untrusted Python">{{ existing.note if existing else '' }}</textarea>
+    </div>
+    <div class="field">
+      <label for="contact">How can we tell you when you're in? <span class="muted">(optional)</span></label>
+      <input id="contact" name="contact" maxlength="{{ contact_max }}" placeholder="email or X handle" value="{{ existing.contact if existing else '' }}">
+      <span class="muted small">Only used to tell you about your invite.</span>
+    </div>
+    <div>
+      <button class="button primary" type="submit">{{ 'Update request' if existing else 'Request an invite' }}</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

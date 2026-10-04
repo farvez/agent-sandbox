@@ -202,3 +202,98 @@ def test_deploy_bundle_ships_console_assets():
     assert 'fileset("${path.module}/..", "src/**")' in main_tf
     console_dir = os.path.join(os.path.dirname(__file__), "..", "src", "console")
     assert os.listdir(os.path.join(console_dir, "templates")) and os.listdir(os.path.join(console_dir, "static"))
+
+
+# ------------------------------------------------------------------ invite requests
+
+def request_form(page_text):
+    return re.search(r'name="csrf" value="([^"]+)"', page_text).group(1)
+
+
+def test_stranger_gets_a_request_form_tied_to_their_github_account(console):
+    client, _, accounts = console
+    denied = sign_in(client, "code-stranger")
+    assert denied.status_code == 403 and "isn't invited" in html.unescape(denied.text)
+    assert "Request an invite" in denied.text and "@stranger" in denied.text
+    assert "airlock_pending" in denied.headers["set-cookie"] and "httponly" in denied.headers["set-cookie"].lower()
+
+    res = client.post("/console/request-invite", data={
+        "csrf": request_form(denied.text), "note": "testing my agent " + "x" * 600, "contact": "me@example.com"})
+    assert res.status_code == 303 and res.headers["location"] == "/console/request-invite"
+    page = client.get("/console/request-invite")
+    assert "Request sent" in page.text and "Your request is in" in page.text
+    saved = accounts.get_request("stranger")
+    assert saved["github_id"] == 3 and saved["contact"] == "me@example.com" and len(saved["note"]) == 500
+
+
+def test_request_needs_the_signed_in_identity_and_its_token(console):
+    client, _, accounts = console
+    denied = sign_in(client, "code-stranger")
+    token = request_form(denied.text)
+    assert client.post("/console/request-invite", data={"csrf": "forged"}).status_code == 400
+    client.cookies.set("airlock_pending", "tampered", domain="console.test", path="/console")
+    assert client.post("/console/request-invite", data={"csrf": token}).status_code == 400
+    assert accounts.list_requests() == []
+
+
+def test_request_page_without_github_sign_in_starts_it(console):
+    client, *_ = console
+    assert client.get("/console/request-invite").headers["location"] == "/console/login"
+
+
+def test_admin_approves_a_request_and_the_user_can_sign_in(console):
+    client, _, accounts = console
+    denied = sign_in(client, "code-stranger")
+    client.post("/console/request-invite", data={"csrf": request_form(denied.text), "note": "evals", "contact": "@stranger"})
+    client.cookies.clear()
+
+    sign_in(client, "code-admin")
+    admin = client.get("/console/admin")
+    assert "Invite requests" in admin.text and "evals" in admin.text and 'class="badge"' in admin.text
+    csrf = csrf_of(admin.text)
+    res = client.post("/console/admin/requests/stranger/approve", data={"csrf": csrf})
+    assert res.status_code == 303
+    assert accounts.is_invited("stranger") and accounts.get_request("stranger") is None
+    assert "Invited @stranger" in client.get("/console/admin").text and "@stranger" in client.get("/console/admin").text
+    client.cookies.clear()
+
+    assert sign_in(client, "code-stranger").status_code == 303   # approved: straight in
+
+
+def test_admin_dismisses_and_non_admins_cannot_decide(console):
+    client, _, accounts = console
+    accounts.request_invite(3, "stranger", "Stranger", "", "", "")
+    sign_in(client, "code-admin")
+    csrf = csrf_of(client.get("/console/admin").text)
+    client.cookies.clear()
+
+    accounts.invite("some-dev", invited_by="farvez")
+    sign_in(client, "code-dev")
+    dev_csrf = csrf_of(client.get("/console").text)
+    assert client.post("/console/admin/requests/stranger/approve", data={"csrf": dev_csrf}).status_code == 403
+    assert not accounts.is_invited("stranger")
+    client.cookies.clear()
+
+    sign_in(client, "code-admin")
+    csrf = csrf_of(client.get("/console/admin").text)
+    assert client.post("/console/admin/requests/stranger/dismiss", data={"csrf": csrf}).status_code == 303
+    assert accounts.get_request("stranger") is None and not accounts.is_invited("stranger")
+
+
+def test_full_request_queue_is_explained(console, monkeypatch):
+    from src.api import accounts as accounts_module
+
+    client, _, accounts = console
+    monkeypatch.setattr(accounts_module, "MAX_PENDING_REQUESTS", 0)
+    denied = sign_in(client, "code-stranger")
+    res = client.post("/console/request-invite", data={"csrf": request_form(denied.text)})
+    assert res.status_code == 503 and "Too many invite requests" in res.text
+
+
+def test_signing_in_as_an_uninvited_account_ends_the_previous_session(console):
+    client, *_ = console
+    sign_in(client, "code-admin")
+    denied = sign_in(client, "code-stranger")
+    assert "@farvez" not in denied.text.lower() and "Sign out" not in denied.text
+    assert 'airlock_session=""' in denied.headers.get("set-cookie", "") or "airlock_session=;" in denied.headers.get("set-cookie", "")
+    assert client.get("/console/keys").headers["location"] == "/console"

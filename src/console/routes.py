@@ -33,6 +33,11 @@ from src.console.terminal import HOME, MAX_COMMAND_CHARS, clean_cwd, split_cwd, 
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 FLASH_COOKIE = "airlock_flash"
+# A GitHub user who signed in without an invite: their verified identity, so they can
+# request one without a console session (and nobody can request in someone else's name).
+PENDING_COOKIE = "airlock_pending"
+PENDING_TTL = 30 * 60
+NOTE_MAX, CONTACT_MAX = 500, 200
 GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 SECURITY_HEADERS = {
@@ -100,9 +105,11 @@ def build_console_router(
     def render(request: Request, template: str, status_code: int = 200, **context) -> HTMLResponse:
         session = session_of(request)
         flash = signer.loads(request.cookies.get(FLASH_COOKIE))
+        admin = bool(session and is_admin(session))
         response = TEMPLATES.TemplateResponse(request, template, {
-            "session": session, "is_admin": bool(session and is_admin(session)),
+            "session": session, "is_admin": admin,
             "base_url": config.base_url, "workspaces_enabled": sessions is not None,
+            "pending_requests": len(accounts().list_requests()) if admin else 0,
             "flash": flash, **context,
         }, status_code=status_code)
         response.headers.update(SECURITY_HEADERS)
@@ -181,15 +188,55 @@ def build_console_router(
         allowed = (login_lower in config.admins or config.signup == "open"
                    or accounts().get_user(gh["id"]) is not None or accounts().is_invited(login_lower))
         if not allowed:
-            return render(request, "message.html", 403, title="Invite needed",
-                          message=f"@{gh['login']} isn't invited yet. The console is invite-only for now — "
-                                  "ask the operator to invite your GitHub username.")
+            pending = {"gid": gh["id"], "login": gh["login"], "name": gh["name"] or gh["login"],
+                       "avatar": gh["avatar_url"], "csrf": secrets.token_urlsafe(24)}
+            response = invite_page(request, pending, 403)
+            response.set_cookie(PENDING_COOKIE, signer.dumps(pending, PENDING_TTL), max_age=PENDING_TTL,
+                                httponly=True, secure=secure_cookies, samesite="lax", path="/console")
+            response.delete_cookie(STATE_COOKIE, path="/console")
+            response.delete_cookie(SESSION_COOKIE, path="/console")   # a different GitHub account signed in
+            return response
         user = accounts().save_user(gh["id"], gh["login"], gh["name"], gh["avatar_url"], tenant_for_login(gh["login"]))
+        accounts().delete_request(login_lower)   # they're in; nothing left to approve
         response = redirect("/console")
         response.set_cookie(SESSION_COOKIE, signer.dumps(new_session(user), SESSION_TTL), max_age=SESSION_TTL,
                             httponly=True, secure=secure_cookies, samesite="lax", path="/console")
         response.delete_cookie(STATE_COOKIE, path="/console")
+        response.delete_cookie(PENDING_COOKIE, path="/console")
         return response
+
+    # ------------------------------------------------------------------ invite requests
+
+    def invite_page(request: Request, pending: dict, status_code: int = 200, error: Optional[str] = None):
+        login = pending["login"]
+        # Shown to someone without an account: never with another account's session in the header.
+        return render(request, "invite_needed.html", status_code, session=None, is_admin=False, pending_requests=0,
+                      pending=pending,
+                      existing=accounts().get_request(login), invited=accounts().is_invited(login),
+                      note_max=NOTE_MAX, contact_max=CONTACT_MAX, error=error)
+
+    @router.get("/request-invite", response_class=HTMLResponse)
+    async def request_invite_page(request: Request):
+        pending = signer.loads(request.cookies.get(PENDING_COOKIE))
+        if pending is None:
+            return redirect("/console/login")   # who's asking is confirmed by signing in with GitHub
+        return invite_page(request, pending)
+
+    @router.post("/request-invite", response_class=HTMLResponse)
+    async def request_invite(request: Request, csrf: str = Form(""), note: str = Form(""), contact: str = Form("")):
+        from src.api.accounts import RequestsFull
+
+        pending = signer.loads(request.cookies.get(PENDING_COOKIE))
+        if pending is None or not secrets.compare_digest(csrf, pending.get("csrf", "")):
+            return render(request, "message.html", 400, title="Sign in again",
+                          message="This form expired. Sign in with GitHub again to request an invite.")
+        try:
+            accounts().request_invite(pending["gid"], pending["login"], pending["name"], pending["avatar"],
+                                      note.strip()[:NOTE_MAX], contact.strip()[:CONTACT_MAX])
+        except RequestsFull as e:
+            return invite_page(request, pending, 503, error=str(e))
+        return set_flash(redirect("/console/request-invite"), "ok",
+                         "Request sent. You'll be able to sign in once it's approved.")
 
     @router.post("/logout")
     @guarded
@@ -237,12 +284,15 @@ def build_console_router(
 
     # ------------------------------------------------------------------ admin: invites
 
+    def admin_view(request: Request, error: Optional[str] = None):
+        return render(request, "admin.html", invites=accounts().list_invites(), users=accounts().list_users(),
+                      requests=accounts().list_requests(), signup=config.signup, error=error)
+
     @router.get("/admin", response_class=HTMLResponse)
     @guarded
     async def admin_page(request: Request):
         require(request, admin=True)
-        return render(request, "admin.html", invites=accounts().list_invites(), users=accounts().list_users(),
-                      signup=config.signup, error=None)
+        return admin_view(request)
 
     @router.post("/admin/invites", response_class=HTMLResponse)
     @guarded
@@ -254,8 +304,28 @@ def build_console_router(
             error = f"'{login}' isn't a valid GitHub username."
         else:
             accounts().invite(login, invited_by=session["login"])
-        return render(request, "admin.html", invites=accounts().list_invites(), users=accounts().list_users(),
-                      signup=config.signup, error=error)
+            accounts().delete_request(login)
+        return admin_view(request, error)
+
+    @router.post("/admin/requests/{login}/approve")
+    @guarded
+    async def approve_request(request: Request, login: str, csrf: str = Form("")):
+        session = require(request, csrf, admin=True)
+        if not GITHUB_LOGIN_RE.match(login):
+            raise _Forbidden("That isn't a valid GitHub username.")
+        found = accounts().get_request(login)
+        accounts().invite(login, invited_by=session["login"])
+        accounts().delete_request(login)
+        reach = f" Contact they left: {found['contact']}" if found and found.get("contact") else ""
+        return set_flash(redirect("/console/admin"), "ok",
+                         f"Invited @{login}. Let them know they can sign in now.{reach}")
+
+    @router.post("/admin/requests/{login}/dismiss")
+    @guarded
+    async def dismiss_request(request: Request, login: str, csrf: str = Form("")):
+        require(request, csrf, admin=True)
+        accounts().delete_request(login)
+        return set_flash(redirect("/console/admin"), "ok", f"Dismissed the request from @{login}.")
 
     @router.post("/admin/invites/{login}/delete", response_class=HTMLResponse)
     @guarded

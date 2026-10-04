@@ -84,3 +84,27 @@ def test_concurrent_increments_are_not_lost(tmp_path):
 
 def test_period_format():
     assert current_period(1_790_000_000) == "2026-09"
+
+
+def test_invite_requests_update_in_place_and_list_oldest_first(store):
+    first = store.request_invite(3, "Stranger", "Stranger", "", "agents", "me@example.com")
+    store._clock.now += 60
+    store.request_invite(4, "other", "", "", "", "")
+    store._clock.now += 60
+    again = store.request_invite(3, "stranger", "Stranger", "", "agents + evals", "")
+    assert again["requested_at"] == first["requested_at"] and again["note"] == "agents + evals"
+    assert [r["login"] for r in store.list_requests()] == ["stranger", "other"]
+    assert store.get_request("STRANGER")["display_login"] == "stranger"
+    store.delete_request("Stranger")
+    assert store.get_request("stranger") is None and len(store.list_requests()) == 1
+
+
+def test_pending_requests_are_capped(store, monkeypatch):
+    from src.api import accounts as accounts_module
+
+    monkeypatch.setattr(accounts_module, "MAX_PENDING_REQUESTS", 2)
+    store.request_invite(1, "a", "", "", "", "")
+    store.request_invite(2, "b", "", "", "", "")
+    with pytest.raises(accounts_module.RequestsFull):
+        store.request_invite(3, "c", "", "", "", "")
+    store.request_invite(1, "a", "", "", "updated", "")   # updating an existing request still works

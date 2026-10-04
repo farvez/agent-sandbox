@@ -3,6 +3,7 @@
 Items are addressed by a string key:
     user#<github_id>              a console user and the tenant they own
     invite#<github_login>         permission to sign up (invite-only mode)
+    request#<github_login>        a signed-in GitHub user asking for an invite
     usage#<tenant>#<YYYY-MM>      monthly counters: sessions, commands, command_seconds
 
 Backends (SANDBOX_ACCOUNTS): dynamodb:<table> on the server, sqlite:<path> locally.
@@ -18,6 +19,11 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 
 COUNTERS = ("sessions", "commands", "command_seconds")
+MAX_PENDING_REQUESTS = 500   # keeps a flood of sign-ins from filling the table
+
+
+class RequestsFull(Exception):
+    """Too many invite requests are waiting; new ones are refused until some are handled."""
 
 
 def current_period(now: Optional[float] = None) -> str:
@@ -163,6 +169,33 @@ class AccountStore:
 
     def list_invites(self) -> List[dict]:
         return self._items.prefix("invite#")
+
+    # ---------------------------------------------------------------- invite requests
+
+    def request_invite(self, github_id: int, login: str, name: str, avatar_url: str,
+                       note: str = "", contact: str = "") -> dict:
+        """Records (or updates) a request from a GitHub user who signed in without an invite."""
+        key = f"request#{login.lower()}"
+        existing = self._items.get(key)
+        if existing is None and len(self.list_requests()) >= MAX_PENDING_REQUESTS:
+            raise RequestsFull("Too many invite requests are waiting right now. Please try again in a few days.")
+        now = self._clock()
+        record = {
+            "login": login.lower(), "display_login": login, "github_id": github_id, "name": name or login,
+            "avatar_url": avatar_url, "note": note, "contact": contact,
+            "requested_at": (existing or {}).get("requested_at", now), "updated_at": now,
+        }
+        self._items.put(key, record)
+        return record
+
+    def get_request(self, login: str) -> Optional[dict]:
+        return self._items.get(f"request#{login.lower()}")
+
+    def delete_request(self, login: str) -> None:
+        self._items.delete(f"request#{login.lower()}")
+
+    def list_requests(self) -> List[dict]:
+        return sorted(self._items.prefix("request#"), key=lambda r: r.get("requested_at", 0))
 
     # ---------------------------------------------------------------- usage metering
 

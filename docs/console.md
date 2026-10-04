@@ -35,6 +35,11 @@ commands count toward usage like API calls.
 - **Access:** `console_signup = "invite"` (default): admins (`console_admins`) and invited
   GitHub users only — admins invite people from the console's **Admin** page. `"open"` lets
   anyone with GitHub sign in.
+- **Invite requests:** someone who signs in with GitHub without an invite can request one
+  (optional use case and contact). Requests are tied to the verified GitHub account (a signed,
+  30-minute cookie carries it), one per account, at most 500 waiting. Admins see a count on the
+  **Admin** tab and approve or dismiss each one; approving invites that username. The console
+  sends no messages, so tell people when they're in.
 - **Usage metering:** every session and command is counted per tenant per month
   (`SANDBOX_ACCOUNTS`, the same table as accounts and invites) — the basis for free-plan
   quotas and paid plans later.
