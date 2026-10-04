@@ -223,6 +223,16 @@ class Sandbox:
         data = self._call("POST", "/exec", {"command": command, "timeout_seconds": timeout})
         return CommandResult.from_response(data)
 
+    def import_repo(self, repo: str, ref: Optional[str] = None, path: Optional[str] = None) -> dict:
+        """Imports a public GitHub repository ("owner/repo" or its URL) into /workspace/<path>.
+
+        `path` defaults to the repository name; `ref` (branch, tag or commit) to the default
+        branch. The server downloads it, so the session needs no egress. Returns
+        {"repo", "ref", "path", "files", "archive_bytes"}.
+        """
+        body = {"repo": repo, "ref": ref, "path": path}
+        return self._call("POST", "/import", body, timeout=max(self._http.timeout, 240))
+
     def egress_log(self, limit: int = 200) -> List[dict]:
         """Every outbound connection this session attempted, allowed or denied."""
         return self._call("GET", f"/egress?limit={int(limit)}")["events"]
@@ -254,7 +264,7 @@ class Sandbox:
 
     # ------------------------------------------------------------------ internals
 
-    def _call(self, method: str, suffix: str, body: Optional[dict] = None):
+    def _call(self, method: str, suffix: str, body: Optional[dict] = None, timeout: Optional[float] = None):
         if not self.session_id:
             raise SandboxError("Sandbox not started: use `with Sandbox(...)` or call start().")
-        return self._http.request(method, f"/v1/sessions/{self.session_id}{suffix}", body)
+        return self._http.request(method, f"/v1/sessions/{self.session_id}{suffix}", body, timeout=timeout)

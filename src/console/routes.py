@@ -14,8 +14,9 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Set
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 from fastapi.templating import Jinja2Templates
 
 from src.console.auth import (
@@ -28,8 +29,10 @@ from src.console.auth import (
     new_session,
     tenant_for_login,
 )
+from src.console.terminal import HOME, MAX_COMMAND_CHARS, clean_cwd, split_cwd, wrap_command
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+FLASH_COOKIE = "airlock_flash"
 GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 SECURITY_HEADERS = {
@@ -78,6 +81,7 @@ def build_console_router(
     limits: Callable,            # (tenant) -> usage/limits dict
     egress: Callable,            # (tenant) -> list of allowed hosts
     github: Optional[GitHubOAuth] = None,
+    sessions=None,               # ConsoleSessions (server.py); None hides the workspace pages
 ) -> APIRouter:
     router = APIRouter(prefix="/console", include_in_schema=False)
     signer = Signer(config.session_secret)
@@ -95,11 +99,21 @@ def build_console_router(
 
     def render(request: Request, template: str, status_code: int = 200, **context) -> HTMLResponse:
         session = session_of(request)
+        flash = signer.loads(request.cookies.get(FLASH_COOKIE))
         response = TEMPLATES.TemplateResponse(request, template, {
             "session": session, "is_admin": bool(session and is_admin(session)),
-            "base_url": config.base_url, **context,
+            "base_url": config.base_url, "workspaces_enabled": sessions is not None,
+            "flash": flash, **context,
         }, status_code=status_code)
         response.headers.update(SECURITY_HEADERS)
+        if flash is not None:
+            response.delete_cookie(FLASH_COOKIE, path="/console")
+        return response
+
+    def set_flash(response: Response, kind: str, text: str) -> Response:
+        """A one-time notice shown on the next page (signed, so it can't be forged into the page)."""
+        response.set_cookie(FLASH_COOKIE, signer.dumps({"kind": kind, "text": text[:600]}, 120), max_age=120,
+                            httponly=True, secure=secure_cookies, samesite="lax", path="/console")
         return response
 
     def redirect(url: str) -> RedirectResponse:
@@ -249,6 +263,136 @@ def build_console_router(
         require(request, csrf, admin=True)
         accounts().uninvite(login)
         return redirect("/console/admin")
+
+
+    # ------------------------------------------------------------------ workspaces: sessions, repo import, terminal
+
+    if sessions is None:
+        return router
+
+    from src.api.limits import LimitExceeded
+
+    def failure(error: Exception):
+        """(status, message) for the errors session operations raise on purpose."""
+        if isinstance(error, HTTPException):
+            return error.status_code, str(error.detail)
+        if isinstance(error, LimitExceeded):
+            return 429, str(error)
+        raise error
+
+    def json_response(status_code: int, body: dict) -> JSONResponse:
+        return JSONResponse(body, status_code=status_code, headers=SECURITY_HEADERS)
+
+    def require_api(request: Request) -> Optional[dict]:
+        """For the terminal's fetch() calls: the session, with the CSRF token in a header."""
+        session = session_of(request)
+        token = request.headers.get("X-CSRF-Token", "")
+        if session is None or not secrets.compare_digest(token, session["csrf"]):
+            return None
+        return session
+
+    def workspaces_page(request: Request, session: dict, error: Optional[str] = None, status_code: int = 200):
+        tenant = session["tid"]
+        return render(request, "workspaces.html", status_code, workspaces=sessions.list(tenant),
+                      egress=egress(tenant), limits=limits(tenant), ttl_minutes=sessions.ttl_seconds // 60, error=error)
+
+    @router.get("/workspaces", response_class=HTMLResponse)
+    @guarded
+    async def list_workspaces(request: Request):
+        session = require(request)
+        return workspaces_page(request, session)
+
+    @router.post("/workspaces", response_class=HTMLResponse)
+    @guarded
+    async def create_workspace(request: Request, csrf: str = Form(""), internet: str = Form(""),
+                               repo: str = Form(""), ref: str = Form("")):
+        session = require(request, csrf)
+        tenant = session["tid"]
+        try:
+            created = await run_in_threadpool(sessions.create, tenant, egress(tenant) if internet else [])
+        except Exception as e:
+            status_code, message = failure(e)
+            return workspaces_page(request, session, error=message, status_code=status_code)
+        response = redirect(f"/console/workspaces/{created['session_id']}")
+        if repo.strip():
+            try:
+                result = await run_in_threadpool(sessions.import_repo, tenant, created["session_id"],
+                                                 repo, ref.strip() or None, None)
+                set_flash(response, "ok", f"Imported {result['repo']} ({result['files']} files) into {result['path']}.")
+                response.headers["location"] += f"?cwd={result['path']}"
+            except Exception as e:
+                set_flash(response, "error", f"The workspace is ready, but the import failed: {failure(e)[1]}")
+        return response
+
+    @router.get("/workspaces/{session_id}", response_class=HTMLResponse)
+    @guarded
+    async def open_workspace(request: Request, session_id: str, cwd: str = HOME):
+        session = require(request)
+        try:
+            workspace = sessions.get(session["tid"], session_id)
+        except Exception as e:
+            status_code, message = failure(e)
+            return render(request, "message.html", status_code, title="Workspace not available",
+                          message=f"{message}. Workspaces close after {sessions.ttl_seconds // 60} minutes without use.")
+        return render(request, "workspace.html", workspace=workspace, home=HOME, start_cwd=clean_cwd(cwd),
+                      ttl_minutes=sessions.ttl_seconds // 60)
+
+    @router.post("/workspaces/{session_id}/delete")
+    @guarded
+    async def delete_workspace(request: Request, session_id: str, csrf: str = Form("")):
+        session = require(request, csrf)
+        response = redirect("/console/workspaces")
+        try:
+            await run_in_threadpool(sessions.destroy, session["tid"], session_id)
+            set_flash(response, "ok", f"Closed {session_id} and wiped its files.")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
+
+    @router.post("/workspaces/{session_id}/exec")
+    async def workspace_exec(request: Request, session_id: str):
+        session = require_api(request)
+        if session is None:
+            return json_response(401, {"error": "Your console session expired. Reload the page."})
+        try:
+            body = await request.json()
+            command = str(body.get("command", ""))
+            cwd = str(body.get("cwd") or HOME)
+            timeout = max(1, min(int(body.get("timeout", 30)), 60))
+        except Exception:
+            return json_response(400, {"error": "Malformed request."})
+        if not command.strip():
+            return json_response(400, {"error": "Type a command."})
+        if len(command) > MAX_COMMAND_CHARS:
+            return json_response(400, {"error": f"Commands are limited to {MAX_COMMAND_CHARS} characters."})
+        try:
+            result = await run_in_threadpool(sessions.run, session["tid"], session_id, wrap_command(command, cwd), timeout)
+        except Exception as e:
+            status_code, message = failure(e)
+            return json_response(status_code, {"error": message})
+        stdout, new_cwd = split_cwd(result["stdout"], cwd)
+        return json_response(200, {
+            "stdout": stdout, "stderr": result["stderr"], "exit_code": result["exit_code"],
+            "timed_out": result["timed_out"], "warnings": result["warnings"], "cwd": new_cwd,
+        })
+
+    @router.post("/workspaces/{session_id}/import")
+    async def workspace_import(request: Request, session_id: str):
+        session = require_api(request)
+        if session is None:
+            return json_response(401, {"error": "Your console session expired. Reload the page."})
+        try:
+            body = await request.json()
+            repo, ref, path = (str(body.get(k) or "").strip()[:300] for k in ("repo", "ref", "path"))
+        except Exception:
+            return json_response(400, {"error": "Malformed request."})
+        try:
+            result = await run_in_threadpool(sessions.import_repo, session["tid"], session_id,
+                                             repo, ref or None, path or None)
+        except Exception as e:
+            status_code, message = failure(e)
+            return json_response(status_code, {"error": message})
+        return json_response(200, result)
 
     return router
 

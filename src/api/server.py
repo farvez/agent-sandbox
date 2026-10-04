@@ -20,6 +20,7 @@ from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKe
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
+from src.api.repos import RepoImportError, clean_destination, fetch_archive, import_archive, parse_repo
 from src.step5_agent.sandbox import SandboxedWorkspace, format_result
 from src.step5_agent.workspace_pool import QuotaExceededError, WorkspaceCapacityError
 
@@ -163,16 +164,34 @@ class RunCommandResponse(BaseModel):
     warnings: List[str]
 
 
+class ImportRepoRequest(BaseModel):
+    repo: str = Field(..., max_length=300, description='Public GitHub repository: "owner/repo" or its https://github.com URL')
+    ref: Optional[str] = Field(default=None, max_length=200, description="Branch, tag or commit (default: the default branch)")
+    path: Optional[str] = Field(default=None, max_length=200, description="Folder inside /workspace (default: the repo name)")
+
+
 class SessionRecord:
-    def __init__(self, session_id: str, workspace: SandboxedWorkspace, tenant_id: str):
+    def __init__(self, session_id: str, workspace: SandboxedWorkspace, tenant_id: str, egress: Optional[List[str]] = None):
         self.session_id = session_id
         self.workspace = workspace
         self.tenant_id = tenant_id
+        self.egress = list(egress or [])
         self.created_at = time.time()
         self.last_accessed_at = time.time()
 
     def touch(self):
         self.last_accessed_at = time.time()
+
+    def summary(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "tenant_id": self.tenant_id,
+            "egress": list(self.egress),
+            "created_at": self.created_at,
+            "last_accessed_at": self.last_accessed_at,
+            "expires_at": self.last_accessed_at + SESSION_TTL_SECONDS,
+            "disk_quota_mb": self.workspace.quota_bytes // 2**20,
+        }
 
 
 active_sessions: Dict[str, SessionRecord] = {}
@@ -268,22 +287,19 @@ def get_authorized_session(session_id: str, tenant_id: str) -> SessionRecord:
         return rec
 
 
-@app.get("/healthz")
-def health_check():
-    with sessions_lock:
-        count = len(active_sessions)
-    return {"status": "healthy", "active_sessions": count}
+# ------------------------------------------------------------------ session operations
+# Shared by the REST API (API-key auth) and the console (GitHub sign-in): callers
+# authenticate and rate-limit first, then pass the tenant in.
 
-
-@app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize)):
-    if request.template not in ALLOWED_TEMPLATES:
+def start_session(tenant_id: str, template: str = "sandbox-base:latest",
+                  egress_request: Optional[List[str]] = None) -> SessionRecord:
+    if template not in ALLOWED_TEMPLATES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Template '{request.template}' not permitted. Allowed: {list(ALLOWED_TEMPLATES)}"
+            detail=f"Template '{template}' not permitted. Allowed: {list(ALLOWED_TEMPLATES)}"
         )
 
-    egress = expand_rules(request.egress)
+    egress = expand_rules(egress_request or [])
     allowed = tenant_egress(tenant_id)
     refused = [rule for rule in egress if not rule_covered(rule, allowed)]
     if refused:
@@ -296,7 +312,7 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
     try:
         workspace = SandboxedWorkspace(
-            base_image=request.template, egress=egress, session_id=session_id, tenant_id=tenant_id
+            base_image=template, egress=egress, session_id=session_id, tenant_id=tenant_id
         )
     except WorkspaceCapacityError as e:
         LIMITS.close_session(tenant_id)
@@ -305,22 +321,81 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
         LIMITS.close_session(tenant_id)
         raise
 
+    rec = SessionRecord(session_id=session_id, workspace=workspace, tenant_id=tenant_id, egress=egress)
     with sessions_lock:
-        active_sessions[session_id] = SessionRecord(
-            session_id=session_id,
-            workspace=workspace,
-            tenant_id=tenant_id,
-        )
+        active_sessions[session_id] = rec
     record_usage(tenant_id, sessions=1)
+    return rec
 
+
+def run_in_session(rec: SessionRecord, command: str, timeout_seconds: int) -> dict:
+    with LIMITS.running_command(rec.tenant_id):  # 429 when too many are already running
+        started = time.monotonic()
+        result = rec.workspace.execute(command=command, timeout_seconds=timeout_seconds)
+    record_usage(rec.tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
+    return result
+
+
+def import_repo_into(rec: SessionRecord, repo: str, ref: Optional[str] = None, path: Optional[str] = None) -> dict:
+    """Downloads a public GitHub repository and unpacks it into the session's workspace."""
+    try:
+        parsed = parse_repo(repo, ref)
+        dest = clean_destination(path, parsed)
+        archive = fetch_archive(parsed)
+        with LIMITS.running_command(rec.tenant_id):
+            started = time.monotonic()
+            result = import_archive(rec.workspace, parsed, archive, dest)
+    except RepoImportError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except QuotaExceededError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    record_usage(rec.tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
+    return result
+
+
+def end_session(session_id: str, tenant_id: str) -> None:
+    with sessions_lock:
+        rec = active_sessions.get(session_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if rec.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        active_sessions.pop(session_id, None)
+
+    rec.workspace.cleanup()
+    LIMITS.close_session(tenant_id)
+
+
+def tenant_sessions(tenant_id: str) -> List[SessionRecord]:
+    with sessions_lock:
+        return sorted((r for r in active_sessions.values() if r.tenant_id == tenant_id),
+                      key=lambda r: r.created_at, reverse=True)
+
+
+@app.get("/healthz")
+def health_check():
+    with sessions_lock:
+        count = len(active_sessions)
+    return {"status": "healthy", "active_sessions": count}
+
+
+@app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
+def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize)):
+    rec = start_session(tenant_id, request.template, request.egress)
     return CreateSessionResponse(
-        session_id=session_id,
+        session_id=rec.session_id,
         tenant_id=tenant_id,
-        egress=egress,
-        disk_quota_mb=workspace.quota_bytes // 2**20,
-        created_at=time.time(),
+        egress=rec.egress,
+        disk_quota_mb=rec.workspace.quota_bytes // 2**20,
+        created_at=rec.created_at,
         status="ready",
     )
+
+
+@app.get("/v1/sessions")
+def list_sessions(tenant_id: str = Security(authorize)):
+    """This tenant's open sessions, newest first (including ones started from the console)."""
+    return {"tenant_id": tenant_id, "sessions": [r.summary() for r in tenant_sessions(tenant_id)]}
 
 
 # ------------------------------------------------------------------ API keys
@@ -444,35 +519,58 @@ def read_file(session_id: str, path: str, tenant_id: str = Security(authorize)):
 @app.post("/v1/sessions/{session_id}/exec", response_model=RunCommandResponse)
 def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
-    with LIMITS.running_command(tenant_id):  # 429 when too many are already running
-        started = time.monotonic()
-        result = rec.workspace.execute(
-            command=request.command,
-            timeout_seconds=request.timeout_seconds,
-        )
-    record_usage(tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
+    result = run_in_session(rec, request.command, request.timeout_seconds)
     return RunCommandResponse(command=request.command, output=format_result(result), **result)
+
+
+@app.post("/v1/sessions/{session_id}/import")
+def import_repo(session_id: str, request: ImportRepoRequest, tenant_id: str = Security(authorize)):
+    """Imports a public GitHub repository into /workspace/<path> (default: the repo name).
+
+    The server downloads the archive (size-capped) and it is unpacked inside the
+    sandbox, within the workspace disk quota. The session needs no egress for this.
+    """
+    rec = get_authorized_session(session_id, tenant_id)
+    return import_repo_into(rec, request.repo, request.ref, request.path)
 
 
 @app.delete("/v1/sessions/{session_id}", status_code=status.HTTP_200_OK)
 def destroy_session(session_id: str, tenant_id: str = Security(authorize)):
-    with sessions_lock:
-        rec = active_sessions.get(session_id)
-        if not rec:
-            raise HTTPException(status_code=404, detail="Session not found")
-        if rec.tenant_id != tenant_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
-        active_sessions.pop(session_id, None)
-
-    rec.workspace.cleanup()
-    LIMITS.close_session(tenant_id)
-
+    end_session(session_id, tenant_id)
     return {"status": "terminated", "session_id": session_id}
 
 
 # ------------------------------------------------------------------ developer console
 
 from src.console.routes import ConsoleConfig, build_console_router  # noqa: E402  (after the API is defined)
+
+class ConsoleSessions:
+    """What the console's workspace pages may do with sessions, for a signed-in tenant."""
+
+    ttl_seconds = SESSION_TTL_SECONDS
+
+    def list(self, tenant_id: str) -> List[dict]:
+        return [r.summary() for r in tenant_sessions(tenant_id)]
+
+    def get(self, tenant_id: str, session_id: str) -> dict:
+        return get_authorized_session(session_id, tenant_id).summary()
+
+    def create(self, tenant_id: str, egress: List[str]) -> dict:
+        LIMITS.check_rate(tenant_id)
+        return start_session(tenant_id, egress_request=egress).summary()
+
+    def run(self, tenant_id: str, session_id: str, command: str, timeout_seconds: int) -> dict:
+        LIMITS.check_rate(tenant_id)
+        return run_in_session(get_authorized_session(session_id, tenant_id), command, timeout_seconds)
+
+    def import_repo(self, tenant_id: str, session_id: str, repo: str, ref: Optional[str], path: Optional[str]) -> dict:
+        LIMITS.check_rate(tenant_id)
+        return import_repo_into(get_authorized_session(session_id, tenant_id), repo, ref, path)
+
+    def destroy(self, tenant_id: str, session_id: str) -> None:
+        LIMITS.check_rate(tenant_id)
+        end_session(session_id, tenant_id)
+
 
 CONSOLE = ConsoleConfig.from_env()
 if CONSOLE is not None:
@@ -487,6 +585,7 @@ if CONSOLE is not None:
         accounts=lambda: ACCOUNTS,
         limits=lambda tenant: LIMITS.usage(tenant),
         egress=tenant_egress,
+        sessions=ConsoleSessions(),
     ))
 
     @app.get("/", include_in_schema=False)

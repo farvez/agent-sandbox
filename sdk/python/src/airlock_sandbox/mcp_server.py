@@ -232,6 +232,21 @@ def build_server(holder: SandboxHolder) -> MCPServer:
         )
         return await run(lambda sbx: sbx.run(command, timeout=15).output)
 
+    @server.tool(annotations=ToolAnnotations(title="Import a GitHub repository", destructive_hint=False))
+    async def import_repo(repo: str, ref: str = "", path: str = "") -> str:
+        """Copy a public GitHub repository into the sandbox workspace.
+
+        repo is "owner/repo" or https://github.com/owner/repo. ref is a branch, tag or commit
+        (default: the default branch); path is the folder under /workspace (default: the repo
+        name). Works without internet access in the sandbox.
+        """
+
+        def do_import(sbx: Sandbox) -> str:
+            r = sbx.import_repo(repo, ref or None, path or None)
+            return f"Imported {r['repo']}@{r['ref']}: {r['files']} files in {r['path']}"
+
+        return await run(do_import)
+
     @server.tool(annotations=ToolAnnotations(title="Egress log", read_only_hint=True))
     async def egress_log(limit: int = 50) -> str:
         """Show the sandbox's outbound internet connections: which hosts were allowed or denied, and why."""

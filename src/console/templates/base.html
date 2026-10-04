@@ -14,6 +14,7 @@
     <nav aria-label="Console">
       <a href="/console" {% if active == 'home' %}aria-current="page"{% endif %}>Overview</a>
       <a href="/console/keys" {% if active == 'keys' %}aria-current="page"{% endif %}>API keys</a>
+      {% if workspaces_enabled %}<a href="/console/workspaces" {% if active == 'workspaces' %}aria-current="page"{% endif %}>Workspaces</a>{% endif %}
       {% if is_admin %}<a href="/console/admin" {% if active == 'admin' %}aria-current="page"{% endif %}>Admin</a>{% endif %}
     </nav>
     <div class="me">
@@ -27,6 +28,7 @@
     {% endif %}
   </header>
   <main>
+    {% if flash %}<p class="flash {{ 'error' if flash.kind == 'error' else 'ok' }}" role="status">{{ flash.text }}</p>{% endif %}
     {% block content %}{% endblock %}
   </main>
   <footer>

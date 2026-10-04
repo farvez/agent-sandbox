@@ -402,3 +402,30 @@ def test_keys_cli(keystore, monkeypatch, capsys):
     with pytest.raises(SystemExit):                                  # last key: refused, clean error
         main(["revoke", listing.split("\n")[1].split()[0]])
     assert "last active key" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- repo import
+
+
+@pytest.fixture
+def fake_github_import(monkeypatch):
+    from src.api.repos import RepoImportError
+
+    def fetch(repo):
+        if repo.name == "private":
+            raise RepoImportError(f"{repo.full_name}@{repo.ref} wasn't found.", 404)
+        return b"tgz"
+
+    monkeypatch.setattr(server, "fetch_archive", fetch)
+    monkeypatch.setattr(server, "import_archive", lambda ws, repo, archive, dest: {
+        "repo": repo.full_name, "ref": repo.ref, "path": f"/workspace/{dest}", "dest": dest, "files": 5,
+        "archive_bytes": len(archive)})
+
+
+def test_import_repo(sbx, fake_github_import):
+    result = sbx.import_repo("psf/requests", ref="v2.32.3", path="lib")
+    assert result["path"] == "/workspace/lib" and result["ref"] == "v2.32.3" and result["files"] == 5
+    with pytest.raises(NotFoundError, match="wasn't found"):
+        sbx.import_repo("someone/private")
+    with pytest.raises(ValidationError):
+        sbx.import_repo("not a repo")

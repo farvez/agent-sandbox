@@ -10,9 +10,9 @@ mcp = pytest.importorskip("mcp", reason="install the SDK with the [mcp] extra")
 import src.api.server as server
 from airlock_sandbox import Sandbox
 from airlock_sandbox.mcp_server import SandboxHolder, build_server
-from tests.test_sdk import KEY, api_url, fresh_state  # noqa: F401  (pytest fixtures)
+from tests.test_sdk import KEY, api_url, fake_github_import, fresh_state  # noqa: F401  (pytest fixtures)
 
-TOOLS = ["run_command", "write_file", "read_file", "list_files", "egress_log", "sandbox_info", "reset_sandbox"]
+TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "sandbox_info", "reset_sandbox"]
 
 
 def make_holder(url, egress=None):
@@ -179,3 +179,12 @@ def test_different_configurations_use_different_state_files(tmp_path):
     assert a == state_file_for("https://x", "k1", "img", [], str(tmp_path))
     assert a != state_file_for("https://x", "k2", "img", [], str(tmp_path))
     assert a != state_file_for("https://x", "k1", "img", ["pypi"], str(tmp_path))
+
+
+def test_import_repo_tool(api_url, fake_github_import):
+    async def steps(c):
+        return (await c.call_tool("import_repo", {"repo": "https://github.com/psf/requests"}),
+                await c.call_tool("import_repo", {"repo": "someone/private"}))
+    ok, missing = call(make_holder(api_url), steps)
+    assert not ok.is_error and text(ok) == "Imported psf/requests@HEAD: 5 files in /workspace/requests"
+    assert missing.is_error and "wasn't found" in text(missing)

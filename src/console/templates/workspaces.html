@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% set active = 'workspaces' %}
+{% block title %}Workspaces · Airlock console{% endblock %}
+{% block content %}
+<h1>Workspaces</h1>
+<p class="muted">A workspace is a sandbox session: an isolated gVisor container with its own {{ workspaces[0].disk_quota_mb if workspaces else 512 }} MB disk.
+Import a GitHub repository, then run commands in it from the browser. Sessions you start with the API show up here too.
+Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.</p>
+
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2>New workspace</h2>
+  <form class="stack" method="post" action="/console/workspaces">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <div class="field">
+      <label for="repo">Import a public GitHub repository <span class="muted">(optional)</span></label>
+      <input id="repo" name="repo" maxlength="300" placeholder="owner/repo or https://github.com/owner/repo" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="ref">Branch, tag or commit <span class="muted">(optional)</span></label>
+      <input id="ref" name="ref" maxlength="200" placeholder="default branch" autocomplete="off" spellcheck="false">
+    </div>
+    {% if egress %}
+    <label class="check">
+      <input type="checkbox" name="internet" value="1" checked>
+      <span>Allow internet access to {% for host in egress %}<code>{{ host }}</code>{{ ", " if not loop.last }}{% endfor %} <span class="muted">(for <code>pip install</code>; everything else stays blocked)</span></span>
+    </label>
+    {% endif %}
+    <div>
+      <button class="button primary" type="submit" data-busy="Starting…">Start workspace</button>
+      <span class="muted small">{{ limits.sessions_open }} of {{ limits.limits.max_sessions }} sessions open</span>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2>Open workspaces</h2>
+  {% if workspaces %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Session</th><th class="hide-sm">Internet</th><th class="hide-sm">Started</th><th class="hide-sm">Closes if idle at</th><th></th></tr></thead>
+    <tbody>
+    {% for w in workspaces %}
+      <tr>
+        <td><a href="/console/workspaces/{{ w.session_id }}"><code>{{ w.session_id }}</code></a></td>
+        <td class="hide-sm">{% if w.egress %}<span class="pill ok">{{ w.egress | length }} host{{ 's' if w.egress | length != 1 }}</span>{% else %}<span class="pill">none</span>{% endif %}</td>
+        <td class="hide-sm"><time data-ts="{{ w.created_at }}">{{ w.created_at | int }}</time></td>
+        <td class="hide-sm"><time data-ts="{{ w.expires_at }}">{{ w.expires_at | int }}</time></td>
+        <td class="actions">
+          <a class="button" href="/console/workspaces/{{ w.session_id }}">Open</a>
+          <form method="post" action="/console/workspaces/{{ w.session_id }}/delete" data-confirm="Close {{ w.session_id }} and delete its files?">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button danger" type="submit">Close</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No open workspaces.</p>
+  {% endif %}
+</section>
+{% endblock %}

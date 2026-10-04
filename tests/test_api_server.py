@@ -514,3 +514,53 @@ def test_console_needs_both_stores(monkeypatch):
         for k in ("SANDBOX_CONSOLE_BASE_URL", "SANDBOX_GITHUB_CLIENT_ID", "SANDBOX_GITHUB_CLIENT_SECRET", "SANDBOX_CONSOLE_SECRET"):
             monkeypatch.delenv(k)
         importlib.reload(server)
+
+
+# ------------------------------------------------------------------ session listing and repo import
+
+def test_list_sessions_is_tenant_scoped(client):
+    mine = create(client)
+    client.post("/v1/sessions", json={}, headers=OTHER_TENANT)
+    res = client.get("/v1/sessions", headers=AUTH).json()
+    assert [s["session_id"] for s in res["sessions"]] == [mine] and res["tenant_id"] == "acme"
+    assert res["sessions"][0]["expires_at"] > res["sessions"][0]["created_at"]
+
+
+def test_import_repo_endpoint(client, monkeypatch, tmp_path):
+    from src.api.repos import RepoImportError
+
+    seen = {}
+    monkeypatch.setattr(server, "fetch_archive", lambda repo: seen.setdefault("repo", repo) and b"tgz")
+
+    def fake_import(workspace, repo, archive, dest):
+        seen.update(archive=archive, dest=dest)
+        return {"repo": repo.full_name, "ref": repo.ref, "path": f"/workspace/{dest}", "dest": dest,
+                "files": 7, "archive_bytes": len(archive)}
+
+    monkeypatch.setattr(server, "import_archive", fake_import)
+    sid = create(client)
+    res = client.post(f"/v1/sessions/{sid}/import", json={"repo": "https://github.com/psf/requests", "ref": "main"},
+                      headers=AUTH)
+    assert res.status_code == 200 and res.json()["files"] == 7 and res.json()["path"] == "/workspace/requests"
+    assert seen["repo"].ref == "main" and seen["archive"] == b"tgz"
+
+    assert client.post(f"/v1/sessions/{sid}/import", json={"repo": "not a repo"}, headers=AUTH).status_code == 400
+    assert client.post(f"/v1/sessions/{sid}/import", json={"repo": "a/b"}, headers=OTHER_TENANT).status_code == 403
+
+    def missing(repo):
+        raise RepoImportError("not found", 404)
+
+    monkeypatch.setattr(server, "fetch_archive", missing)
+    assert client.post(f"/v1/sessions/{sid}/import", json={"repo": "a/b"}, headers=AUTH).status_code == 404
+
+
+def test_imports_are_metered_as_commands(client, monkeypatch, tmp_path):
+    from src.api.accounts import AccountStore, _SqliteItems
+
+    store = AccountStore(_SqliteItems(str(tmp_path / "a.db")))
+    monkeypatch.setattr(server, "ACCOUNTS", store)
+    monkeypatch.setattr(server, "fetch_archive", lambda repo: b"tgz")
+    monkeypatch.setattr(server, "import_archive", lambda ws, repo, archive, dest: {"files": 1})
+    sid = create(client)
+    assert client.post(f"/v1/sessions/{sid}/import", json={"repo": "a/b"}, headers=AUTH).status_code == 200
+    assert store.usage("acme")["commands"] == 1

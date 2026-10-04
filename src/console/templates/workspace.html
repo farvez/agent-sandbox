@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set active = 'workspaces' %}
+{% block title %}{{ workspace.session_id }} · Airlock console{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div>
+    <p class="muted small"><a href="/console/workspaces">Workspaces</a> /</p>
+    <h1><code class="title-code">{{ workspace.session_id }}</code></h1>
+    <p class="muted small">
+      Internet: {% if workspace.egress %}{% for host in workspace.egress %}<code>{{ host }}</code>{{ ", " if not loop.last }}{% endfor %}{% else %}none{% endif %}
+      · {{ workspace.disk_quota_mb }} MB disk · closes after {{ ttl_minutes }} min idle
+    </p>
+  </div>
+  <form method="post" action="/console/workspaces/{{ workspace.session_id }}/delete" data-confirm="Close this workspace and delete its files?">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <button class="button danger" type="submit">Close workspace</button>
+  </form>
+</div>
+
+<details class="card import">
+  <summary>Import a GitHub repository</summary>
+  <form class="inline" id="import-form" autocomplete="off">
+    <input name="repo" required maxlength="300" placeholder="owner/repo" spellcheck="false" aria-label="Repository">
+    <input name="ref" maxlength="200" placeholder="branch (optional)" spellcheck="false" aria-label="Branch, tag or commit">
+    <input name="path" maxlength="200" placeholder="folder (optional)" spellcheck="false" aria-label="Folder inside /workspace">
+    <button class="button primary" type="submit">Import</button>
+  </form>
+  <p class="muted small">Public repositories only. Downloaded by the server and unpacked inside the sandbox; no internet access needed.</p>
+</details>
+
+<section class="terminal" id="terminal" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" data-home="{{ home }}" data-cwd="{{ start_cwd }}">
+  <div class="term-output" id="term-output" role="log" aria-live="polite" tabindex="0">
+    <div class="term-line muted">Each line runs as its own command in the sandbox (Python 3.11, bash). <code>cd</code> carries over; environment variables don't.
+Try <kbd>ls</kbd>, <kbd>pip install requests</kbd>, <kbd>python -m pytest</kbd>. <kbd>clear</kbd> clears the screen, ↑/↓ recall history.</div>
+  </div>
+  <form class="term-input" id="term-form" autocomplete="off">
+    <label class="prompt" for="term-command" id="term-prompt">~$</label>
+    <input id="term-command" name="command" placeholder="type a command" spellcheck="false" autocapitalize="off" autocomplete="off" maxlength="10000">
+    <select id="term-timeout" aria-label="Time limit">
+      <option value="15">15 s</option>
+      <option value="30" selected>30 s</option>
+      <option value="60">60 s</option>
+    </select>
+    <button class="button primary" type="submit">Run</button>
+  </form>
+</section>
+{% endblock %}

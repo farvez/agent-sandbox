@@ -42,6 +42,18 @@ str(result)          # text form with [STDOUT]/[STDERR]/[EXIT CODE] — handy fo
 Each command runs in a fresh container; files in the workspace persist between
 commands, processes do not.
 
+## Import a GitHub repository
+
+```python
+with Sandbox(egress=["pypi"]) as sbx:
+    sbx.import_repo("psf/requests")                     # or a URL; ref="v2.32.3", path="src"
+    sbx.run("cd requests && pip install -e . pytest", timeout=60).check()
+    print(sbx.run("cd requests && python -m pytest -q tests/test_utils.py", timeout=60).output)
+```
+
+Public repositories only. The server downloads the archive (up to 100 MB) and unpacks it
+inside the sandbox, within the workspace disk quota, so this works without egress.
+
 ## Internet access (egress)
 
 Sandboxes have no network by default. Ask for specific hosts — they must be allowed by
@@ -119,7 +131,7 @@ otherwise swallow the name. If `uvx` reports an old version, run it once with `-
 
 On Windows, if Claude Desktop can't find the command, use its full path (`where airlock-sandbox-mcp`).
 
-**Tools:** `run_command`, `write_file`, `read_file`, `list_files`, `egress_log`,
+**Tools:** `run_command`, `write_file`, `read_file`, `list_files`, `import_repo`, `egress_log`,
 `sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
 on first use and deleted when the client disconnects; files persist between commands
 within it. `AIRLOCK_EGRESS` (or `--egress`) sets which hosts the sandbox may reach — it

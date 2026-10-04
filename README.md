@@ -255,6 +255,23 @@ GitHub, get a tenant (`gh-<login>`) automatically, create, rotate and revoke API
 their usage this month (commands, sandbox time, sessions), limits and internet access, and
 copy quickstart snippets (Python SDK, Claude Code MCP, curl) with the server URL filled in.
 
+**Workspaces** (Phase 2): start a sandbox session from the browser, optionally importing a
+public GitHub repository into it, and run commands in a browser terminal — `pip install`,
+`python -m pytest`, anything bash can do within the sandbox limits. Each line runs as its own
+command on the session's persistent workspace; the terminal carries the working directory
+between lines (`cd` works), environment variables and background processes don't persist.
+Sessions are shared with the API: ones started with an API key appear here and vice versa,
+and terminal commands count toward usage like API calls.
+
+- **Repo import:** the server downloads `github.com/<owner>/<repo>/archive/<ref>.tar.gz`
+  (redirects only to github.com/codeload.github.com, capped at `SANDBOX_IMPORT_MAX_MB`, default
+  100) and writes it into the workspace as one new file (`O_EXCL|O_NOFOLLOW`, so nothing the
+  sandbox planted is followed). It is unpacked **inside the sandbox** by the unprivileged
+  sandbox user, so hostile archives (`../` paths, symlinks, huge files) stay contained and the
+  disk quota applies. The session needs no egress for this. Public repositories only for now.
+- **Terminal safety:** commands go through the same exec path as the API (gVisor, limits,
+  metering); output is inserted as text, never HTML; requests carry the CSRF token in a header.
+
 - **Sign-in:** GitHub OAuth (`read:user` only; the GitHub token is not kept). Sessions are
   HttpOnly, Secure, SameSite=Lax signed cookies; every form carries a CSRF token; pages send
   a strict Content-Security-Policy.
@@ -329,6 +346,8 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | POST | `/v1/sessions` | `{template?, metadata?, egress?}` | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
+| GET | `/v1/sessions` | — | `{tenant_id, sessions: [{session_id, egress, created_at, last_accessed_at, expires_at, disk_quota_mb}]}` — this tenant's open sessions |
+| POST | `/v1/sessions/{id}/import` | `{repo, ref?, path?}` | `{repo, ref, path, files, archive_bytes}` — public GitHub repo unpacked into `/workspace/<path>` · `400` bad name · `404` not found/private · `409` folder exists · `413` too large · `422` unpack failed |
 | POST | `/v1/sessions/{id}/exec` | `{command, timeout_seconds (1–60)}` | `{command, stdout, stderr, exit_code, timed_out, oom_killed, warnings, output}` · `429` too many commands running |
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
@@ -354,6 +373,7 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | `SANDBOX_CONSOLE_ADMINS`, `SANDBOX_CONSOLE_SIGNUP` | —, `invite` | Console admins (GitHub logins) and sign-up mode |
 | `SANDBOX_KEYSTORE` | unset | `dynamodb:<table>` or `sqlite:<path>`: enables self-service keys |
 | `SANDBOX_ADMIN_KEY` | unset | Enables the admin API (≥ 32 chars) |
+| `SANDBOX_IMPORT_MAX_MB` | `100` | Largest GitHub archive `/import` downloads |
 | `SANDBOX_TENANT_LIMITS` | built-in | JSON `{"*": {...defaults}, "tenant": {...overrides}}`; keys `max_sessions`, `requests_per_minute`, `max_concurrent_exec` |
 | `SANDBOX_TENANT_LIMITS_FILE` | — | Same, read from a file |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `512` | Disk quota per session workspace |
@@ -384,6 +404,8 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_sandbox_paths.py` | Traversal, absolute paths, prefix-sibling dirs, symlinks to host files and dirs |
 | `tests/test_tracer_parse.py` | `strace -c` parsing with and without the errors column |
 | `tests/test_console.py` | Console with GitHub faked: sign-in and state check, invite-only access, admin invites, key create/show-once/revoke, CSRF, admin-only pages, tampered sessions, security headers |
+| `tests/test_console_workspaces.py` | Console workspaces: start with/without internet, import on create with one-time notice, limits shown, tenant isolation, terminal exec (cwd tracking, CSRF header, validation, JSON errors), import, close; the cwd-tracking wrapper under real bash |
+| `tests/test_repos.py` | Repo import: accepted/rejected names and refs, destination checks, size cap with and without Content-Length, 404 message, redirects only to GitHub, unpacking flow and cleanup, 409/413/422 cases, planted-symlink refusal; real-container import with hostile `../` paths |
 | `tests/test_accounts.py` | Accounts, invites and usage counters on SQLite and DynamoDB (moto), including concurrent increments |
 | `tests/test_keystore.py` | Key store on SQLite and DynamoDB (moto): issue/authenticate, hash-only storage, immediate revocation through the cache, tenant isolation, limits, last-key guard |
 | `tests/test_limits.py` | Limits config (defaults, overrides, validation), token bucket with a fake clock, session and running-command limits, usage report |
@@ -502,7 +524,8 @@ than a benchmark score.
 ├── src/
 │   ├── step1_runner/ … step5_agent/
 │   ├── egress/             # allowlisting HTTPS proxy + Docker wiring
-│   └── api/server.py
+│   ├── console/            # developer console: GitHub sign-in, keys, workspaces + terminal
+│   └── api/                # server.py, keystore, accounts, limits, repos (GitHub import)
 ├── sdk/python/             # airlock-sandbox: the Python SDK (pip package)
 ├── terraform/              # AWS deployment
 └── tests/                  # pytest suite
@@ -510,7 +533,8 @@ than a benchmark score.
 
 ## Roadmap
 
-- Keys and limits in a database with self-service issuing; shared state for multiple API servers
+- Console: private repositories (GitHub App), a full PTY terminal, free-plan quotas from metering
+- Shared state for multiple API servers
 - Persistent session store (Redis/Postgres) for more than one API worker
 - Remote (HTTP) MCP endpoint on the server, so clients connect with just a URL and key
 - JavaScript/TypeScript SDK
