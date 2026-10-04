@@ -444,3 +444,73 @@ def test_short_admin_key_is_refused_at_startup(monkeypatch):
         importlib.reload(server)
     monkeypatch.delenv("SANDBOX_ADMIN_KEY")
     importlib.reload(server)
+
+
+# ---------------------------------------------------------------- console support: metering, default egress, mounting
+
+
+def test_commands_and_sessions_are_metered(client, monkeypatch, tmp_path):
+    from src.api.accounts import AccountStore, _SqliteItems
+
+    store = AccountStore(_SqliteItems(str(tmp_path / "accounts.db")))
+    monkeypatch.setattr(server, "ACCOUNTS", store)
+    sid = create(client)
+    for _ in range(3):
+        client.post(f"/v1/sessions/{sid}/exec", json={"command": "x"}, headers=AUTH)
+    usage = store.usage("acme")
+    assert usage["sessions"] == 1 and usage["commands"] == 3 and usage["command_seconds"] >= 0
+
+
+def test_metering_failure_never_fails_the_request(client, monkeypatch):
+    class Broken:
+        def record_usage(self, *a, **k):
+            raise RuntimeError("table unavailable")
+    monkeypatch.setattr(server, "ACCOUNTS", Broken())
+    sid = create(client)
+    assert client.post(f"/v1/sessions/{sid}/exec", json={"command": "x"}, headers=AUTH).status_code == 200
+
+
+def test_star_egress_policy_is_the_default_for_unlisted_tenants(client, monkeypatch):
+    monkeypatch.setattr(server, "EGRESS_POLICY", {"*": ["pypi.org", "files.pythonhosted.org"], "acme": ["api.openai.com"]})
+    # globex isn't listed -> gets the "*" default
+    assert client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=OTHER_TENANT).status_code == 201
+    # acme has its own policy, which replaces the default rather than adding to it
+    assert client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=AUTH).status_code == 403
+    assert client.get("/v1/egress/policy", headers=OTHER_TENANT).json()["allowed"] == ["pypi.org", "files.pythonhosted.org"]
+
+
+def test_console_is_mounted_when_configured(monkeypatch, tmp_path):
+    import importlib
+
+    env = {
+        "SANDBOX_CONSOLE_BASE_URL": "https://console.test", "SANDBOX_GITHUB_CLIENT_ID": "id",
+        "SANDBOX_GITHUB_CLIENT_SECRET": "secret", "SANDBOX_CONSOLE_SECRET": "c" * 40,
+        "SANDBOX_KEYSTORE": f"sqlite:{tmp_path / 'k.db'}", "SANDBOX_ACCOUNTS": f"sqlite:{tmp_path / 'a.db'}",
+    }
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    try:
+        importlib.reload(server)
+        c = TestClient(server.app, base_url="https://console.test", follow_redirects=False)
+        assert c.get("/").headers["location"] == "/console"
+        assert "Sign in with GitHub" in c.get("/console").text
+        assert c.get("/console/static/console.css").status_code == 200
+    finally:
+        for k in env:
+            monkeypatch.delenv(k)
+        importlib.reload(server)
+
+
+def test_console_needs_both_stores(monkeypatch):
+    import importlib
+
+    for k, v in {"SANDBOX_CONSOLE_BASE_URL": "https://x", "SANDBOX_GITHUB_CLIENT_ID": "id",
+                 "SANDBOX_GITHUB_CLIENT_SECRET": "s", "SANDBOX_CONSOLE_SECRET": "c" * 40}.items():
+        monkeypatch.setenv(k, v)
+    try:
+        with pytest.raises(RuntimeError, match="SANDBOX_KEYSTORE and SANDBOX_ACCOUNTS"):
+            importlib.reload(server)
+    finally:
+        for k in ("SANDBOX_CONSOLE_BASE_URL", "SANDBOX_GITHUB_CLIENT_ID", "SANDBOX_GITHUB_CLIENT_SECRET", "SANDBOX_CONSOLE_SECRET"):
+            monkeypatch.delenv(k)
+        importlib.reload(server)

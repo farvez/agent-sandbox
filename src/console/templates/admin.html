@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set active = 'admin' %}
+{% block title %}Admin · Airlock console{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+<p class="muted">Sign-up mode: <strong>{{ 'invite-only' if signup == 'invite' else 'open to anyone with GitHub' }}</strong>.</p>
+
+<section>
+  <h2>Invites</h2>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form class="inline" method="post" action="/console/admin/invites">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <label for="login">GitHub username</label>
+    <input id="login" name="login" required maxlength="39" placeholder="octocat">
+    <button class="button primary" type="submit">Invite</button>
+  </form>
+  {% if invites %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>GitHub user</th><th>Invited by</th><th>When</th><th></th></tr></thead>
+    <tbody>
+    {% for i in invites %}
+      <tr>
+        <td><code>@{{ i.login }}</code></td>
+        <td>@{{ i.invited_by }}</td>
+        <td><time data-ts="{{ i.invited_at }}">{{ i.invited_at | int }}</time></td>
+        <td>
+          <form method="post" action="/console/admin/invites/{{ i.login }}/delete">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Removing an invite stops new sign-ups; people who already signed in keep their account.</p>
+  {% else %}
+  <p class="muted">No pending invites.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Users</h2>
+  {% if users %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>User</th><th>Tenant</th><th>Joined</th><th>Last sign-in</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>@{{ u.login }}</td>
+        <td><code>{{ u.tenant_id }}</code></td>
+        <td><time data-ts="{{ u.created_at }}">{{ u.created_at | int }}</time></td>
+        <td><time data-ts="{{ u.last_login_at }}">{{ u.last_login_at | int }}</time></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No users yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

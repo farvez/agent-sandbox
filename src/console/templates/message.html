@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Airlock console{% endblock %}
+{% block content %}
+<section class="message">
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+  <a class="button" href="/console">Back to the console</a>
+</section>
+{% endblock %}

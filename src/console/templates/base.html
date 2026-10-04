@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Airlock console{% endblock %}</title>
+  <link rel="stylesheet" href="/console/static/console.css">
+  <script src="/console/static/console.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/console"><span class="mark" aria-hidden="true"></span>Airlock</a>
+    {% if session %}
+    <nav aria-label="Console">
+      <a href="/console" {% if active == 'home' %}aria-current="page"{% endif %}>Overview</a>
+      <a href="/console/keys" {% if active == 'keys' %}aria-current="page"{% endif %}>API keys</a>
+      {% if is_admin %}<a href="/console/admin" {% if active == 'admin' %}aria-current="page"{% endif %}>Admin</a>{% endif %}
+    </nav>
+    <div class="me">
+      {% if session.avatar %}<img src="{{ session.avatar }}" alt="" width="28" height="28">{% endif %}
+      <span>@{{ session.login }}</span>
+      <form method="post" action="/console/logout">
+        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+        <button class="link" type="submit">Sign out</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <span>Airlock · isolated, network-controlled sandboxes for AI agents</span>
+    <a href="https://pypi.org/project/airlock-sandbox/">Python SDK</a>
+    <a href="https://github.com/farvez/agent-sandbox">GitHub</a>
+  </footer>
+</body>
+</html>

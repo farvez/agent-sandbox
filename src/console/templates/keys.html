@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set active = 'keys' %}
+{% block title %}API keys · Airlock console{% endblock %}
+{% block content %}
+<h1>API keys</h1>
+<p class="muted">Keys belong to tenant <code>{{ session.tid }}</code>. Send one in the <code>X-API-Key</code> header,
+  or set <code>SANDBOX_API_KEY</code> for the SDK.</p>
+
+{% if new_key %}
+<div class="newkey" role="status">
+  <strong>Key "{{ new_key.name }}" created. Copy it now — it won't be shown again.</strong>
+  <div class="code"><button class="copy" type="button" data-copy="newkey">Copy</button><pre id="newkey">{{ new_key.api_key }}</pre></div>
+  <p class="small">Store it in a password manager or your secrets store. If you lose it, revoke it and create another.</p>
+</div>
+{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<form class="inline" method="post" action="/console/keys">
+  <input type="hidden" name="csrf" value="{{ session.csrf }}">
+  <label for="name">New key name</label>
+  <input id="name" name="name" maxlength="100" placeholder="e.g. laptop, ci, my-agent">
+  <button class="button primary" type="submit">Create key</button>
+</form>
+
+{% if keys %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for k in keys | reverse %}
+    <tr {% if not k.active %}class="revoked"{% endif %}>
+      <td>{{ k.name }}</td>
+      <td><code>asb_{{ k.key_id }}_…</code></td>
+      <td><time data-ts="{{ k.created_at }}">{{ k.created_at | int }}</time></td>
+      <td>{% if k.active %}<span class="pill ok">Active</span>{% else %}<span class="pill">Revoked</span>{% endif %}</td>
+      <td>
+        {% if k.active %}
+        <form method="post" action="/console/keys/{{ k.key_id }}/revoke" data-confirm="Revoke &quot;{{ k.name }}&quot;? Anything using it stops working immediately.">
+          <input type="hidden" name="csrf" value="{{ session.csrf }}">
+          <button class="button danger" type="submit">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="muted small">Rotate a key: create a new one, switch your code to it, then revoke the old one. Up to 10 active keys.</p>
+{% else %}
+<p class="muted">No keys yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Airlock console</p>
+  <h1>Run your agents' code somewhere it can't hurt you.</h1>
+  <p class="lede">Every command runs in a throwaway gVisor container: no network unless you allow it,
+    hard memory, CPU, process and disk limits, and every outbound connection logged.</p>
+  <a class="button primary" href="/console/login">Sign in with GitHub</a>
+  {% if signup == 'invite' %}
+  <p class="muted small">Invite-only for now. Signing in only reads your public GitHub profile.</p>
+  {% else %}
+  <p class="muted small">Free while in preview. Signing in only reads your public GitHub profile.</p>
+  {% endif %}
+</section>
+
+<section class="features">
+  <div><h3>API key in seconds</h3><p>Sign in, create a key, and call the sandbox from Python, curl or any agent framework.</p></div>
+  <div><h3>Works with Claude Code</h3><p>One <code>claude mcp add</code> line gives Claude Code a sandbox to run code in.</p></div>
+  <div><h3>Internet only where approved</h3><p>Sandboxes reach approved hosts like PyPI through an egress gateway that logs every connection.</p></div>
+</section>
+{% endblock %}

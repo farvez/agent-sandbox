@@ -10,10 +10,12 @@ from typing import Dict, List, Optional, Set, Tuple
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Security, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
+from src.api.accounts import AccountStore
 from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKey
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.egress.gateway import shutdown_gateway
@@ -82,6 +84,25 @@ def load_egress_policy(raw: Optional[str], path: Optional[str]) -> Dict[str, Lis
 
 
 EGRESS_POLICY = load_egress_policy(os.getenv("SANDBOX_EGRESS_POLICY"), os.getenv("SANDBOX_EGRESS_POLICY_FILE"))
+
+
+def tenant_egress(tenant_id: str) -> List[str]:
+    """The tenant's own policy, else the "*" default (e.g. for console sign-ups), else nothing."""
+    return EGRESS_POLICY.get(tenant_id, EGRESS_POLICY.get("*", []))
+
+
+# Console accounts, invites and usage metering (optional).
+ACCOUNTS = AccountStore.from_config(os.getenv("SANDBOX_ACCOUNTS"), region=os.getenv("AWS_REGION"))
+
+
+def record_usage(tenant_id: str, **counters: float) -> None:
+    """Metering must never fail a request."""
+    if ACCOUNTS is None:
+        return
+    try:
+        ACCOUNTS.record_usage(tenant_id, **counters)
+    except Exception:
+        logger.exception("Usage metering failed for %s", tenant_id)
 LIMITS = LimitTracker(load_tenant_limits(os.getenv("SANDBOX_TENANT_LIMITS"), os.getenv("SANDBOX_TENANT_LIMITS_FILE")))
 
 SESSION_TTL_SECONDS = int(os.getenv("SANDBOX_SESSION_TTL", "1800"))
@@ -263,7 +284,7 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
         )
 
     egress = expand_rules(request.egress)
-    allowed = EGRESS_POLICY.get(tenant_id, [])
+    allowed = tenant_egress(tenant_id)
     refused = [rule for rule in egress if not rule_covered(rule, allowed)]
     if refused:
         raise HTTPException(
@@ -290,6 +311,7 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
             workspace=workspace,
             tenant_id=tenant_id,
         )
+    record_usage(tenant_id, sessions=1)
 
     return CreateSessionResponse(
         session_id=session_id,
@@ -387,7 +409,7 @@ def usage(tenant_id: str = Security(authorize)):
 @app.get("/v1/egress/policy")
 def egress_policy(tenant_id: str = Security(authorize)):
     """The hosts this tenant's sessions may request."""
-    return {"tenant_id": tenant_id, "allowed": EGRESS_POLICY.get(tenant_id, [])}
+    return {"tenant_id": tenant_id, "allowed": tenant_egress(tenant_id)}
 
 
 @app.get("/v1/sessions/{session_id}/egress")
@@ -423,10 +445,12 @@ def read_file(session_id: str, path: str, tenant_id: str = Security(authorize)):
 def run_command(session_id: str, request: RunCommandRequest, tenant_id: str = Security(authorize)):
     rec = get_authorized_session(session_id, tenant_id)
     with LIMITS.running_command(tenant_id):  # 429 when too many are already running
+        started = time.monotonic()
         result = rec.workspace.execute(
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
+    record_usage(tenant_id, commands=1, command_seconds=round(time.monotonic() - started, 3))
     return RunCommandResponse(command=request.command, output=format_result(result), **result)
 
 
@@ -444,3 +468,27 @@ def destroy_session(session_id: str, tenant_id: str = Security(authorize)):
     LIMITS.close_session(tenant_id)
 
     return {"status": "terminated", "session_id": session_id}
+
+
+# ------------------------------------------------------------------ developer console
+
+from src.console.routes import ConsoleConfig, build_console_router  # noqa: E402  (after the API is defined)
+
+CONSOLE = ConsoleConfig.from_env()
+if CONSOLE is not None:
+    if KEYSTORE is None or ACCOUNTS is None:
+        raise RuntimeError("The console needs SANDBOX_KEYSTORE and SANDBOX_ACCOUNTS.")
+    app.mount("/console/static",
+              StaticFiles(directory=os.path.join(os.path.dirname(os.path.dirname(__file__)), "console", "static")),
+              name="console-static")
+    app.include_router(build_console_router(
+        CONSOLE,
+        keystore=lambda: KEYSTORE,
+        accounts=lambda: ACCOUNTS,
+        limits=lambda tenant: LIMITS.usage(tenant),
+        egress=tenant_egress,
+    ))
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse("/console")

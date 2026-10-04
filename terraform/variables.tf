@@ -91,3 +91,33 @@ variable "monthly_budget_usd" {
   type        = number
   default     = 30
 }
+
+variable "github_oauth_client_id" {
+  description = "Client ID of the GitHub OAuth app used for console sign-in. Empty = console disabled."
+  type        = string
+  default     = ""
+}
+
+variable "github_oauth_client_secret" {
+  description = "Client secret of that GitHub OAuth app (stored in SSM). Keep it in terraform.tfvars, which is git-ignored."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "console_admins" {
+  description = "GitHub usernames with console admin rights (invite people, see users). Admins can always sign in."
+  type        = list(string)
+  default     = []
+}
+
+variable "console_signup" {
+  description = "\"invite\": only admins and invited GitHub users can sign in. \"open\": anyone with a GitHub account."
+  type        = string
+  default     = "invite"
+
+  validation {
+    condition     = contains(["invite", "open"], var.console_signup)
+    error_message = "console_signup must be \"invite\" or \"open\"."
+  }
+}

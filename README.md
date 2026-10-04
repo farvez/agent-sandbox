@@ -248,6 +248,30 @@ with Sandbox(egress=["pypi"]) as sbx:
     print(sbx.egress_log())
 ```
 
+### Developer console
+
+`<server>/console` (e.g. `https://airlock.complyoo.com/console`): developers sign in with
+GitHub, get a tenant (`gh-<login>`) automatically, create, rotate and revoke API keys, see
+their usage this month (commands, sandbox time, sessions), limits and internet access, and
+copy quickstart snippets (Python SDK, Claude Code MCP, curl) with the server URL filled in.
+
+- **Sign-in:** GitHub OAuth (`read:user` only; the GitHub token is not kept). Sessions are
+  HttpOnly, Secure, SameSite=Lax signed cookies; every form carries a CSRF token; pages send
+  a strict Content-Security-Policy.
+- **Access:** `console_signup = "invite"` (default): admins (`console_admins`) and invited
+  GitHub users only — admins invite people from the console's **Admin** page. `"open"` lets
+  anyone with GitHub sign in.
+- **Usage metering:** every session and command is counted per tenant per month
+  (`SANDBOX_ACCOUNTS`, the same table as accounts and invites) — the basis for free-plan
+  quotas and paid plans later.
+- **Default egress:** an `"*"` entry in `egress_policy` applies to every tenant not listed, so
+  console sign-ups can `pip install` (`"*" = ["pypi"]`).
+
+Setup: create a GitHub OAuth app (Settings → Developer settings → OAuth Apps → New) with
+homepage `<server>/console` and callback `<server>/console/auth/callback`
+(`terraform output github_oauth_callback_url`), then set `github_oauth_client_id` and
+`github_oauth_client_secret` in `terraform.tfvars` and `terraform apply`.
+
 ### Self-service API keys
 
 Keys can be issued and revoked at runtime — no redeploy. They look like
@@ -325,6 +349,9 @@ when the tenant hits a limit (see **Per-tenant limits**).
 | `SANDBOX_API_KEY` | — | Single key for a tenant named `default` (at least one of the two is required) |
 | `SANDBOX_SESSION_TTL` | `1800` | Idle seconds before a session is reaped |
 | `SANDBOX_REQUIRE_GVISOR` | unset | `1` = fail session creation if `runsc` is missing |
+| `SANDBOX_ACCOUNTS` | unset | `dynamodb:<table>` or `sqlite:<path>`: console accounts, invites and usage metering |
+| `SANDBOX_CONSOLE_BASE_URL`, `SANDBOX_GITHUB_CLIENT_ID`, `SANDBOX_GITHUB_CLIENT_SECRET`, `SANDBOX_CONSOLE_SECRET` | unset | All four enable the console |
+| `SANDBOX_CONSOLE_ADMINS`, `SANDBOX_CONSOLE_SIGNUP` | —, `invite` | Console admins (GitHub logins) and sign-up mode |
 | `SANDBOX_KEYSTORE` | unset | `dynamodb:<table>` or `sqlite:<path>`: enables self-service keys |
 | `SANDBOX_ADMIN_KEY` | unset | Enables the admin API (≥ 32 chars) |
 | `SANDBOX_TENANT_LIMITS` | built-in | JSON `{"*": {...defaults}, "tenant": {...overrides}}`; keys `max_sessions`, `requests_per_minute`, `max_concurrent_exec` |
@@ -356,6 +383,8 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_runner.py` | Step 1 runner: output, exit codes, timeout, missing binary |
 | `tests/test_sandbox_paths.py` | Traversal, absolute paths, prefix-sibling dirs, symlinks to host files and dirs |
 | `tests/test_tracer_parse.py` | `strace -c` parsing with and without the errors column |
+| `tests/test_console.py` | Console with GitHub faked: sign-in and state check, invite-only access, admin invites, key create/show-once/revoke, CSRF, admin-only pages, tampered sessions, security headers |
+| `tests/test_accounts.py` | Accounts, invites and usage counters on SQLite and DynamoDB (moto), including concurrent increments |
 | `tests/test_keystore.py` | Key store on SQLite and DynamoDB (moto): issue/authenticate, hash-only storage, immediate revocation through the cache, tenant isolation, limits, last-key guard |
 | `tests/test_limits.py` | Limits config (defaults, overrides, validation), token bucket with a fake clock, session and running-command limits, usage report |
 | `tests/test_sdk.py` | The SDK against the real API over HTTP: lifecycle, structured results, files, every error type, retries on 429/503 with `Retry-After`, agent tools in both formats, legacy text parsing, use with `AutonomousCodingAgent` |

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set active = 'home' %}
+{% block title %}Overview · Airlock console{% endblock %}
+{% block content %}
+<h1>Welcome, {{ session.name }}</h1>
+<p class="muted">Tenant <code>{{ tenant }}</code> · Free preview</p>
+
+{% if active_keys == 0 %}
+<div class="callout">
+  <div><strong>Create your first API key</strong><p>You need one to call the sandbox from your code or from Claude Code.</p></div>
+  <a class="button primary" href="/console/keys">Create a key</a>
+</div>
+{% endif %}
+
+<section class="grid">
+  <div class="card">
+    <h2>This month</h2>
+    <dl class="stats">
+      <div><dt>Commands run</dt><dd>{{ usage.commands | int }}</dd></div>
+      <div><dt>Sandbox time</dt><dd>{{ '%.1f' | format(usage.command_seconds / 60) }} min</dd></div>
+      <div><dt>Sessions started</dt><dd>{{ usage.sessions | int }}</dd></div>
+    </dl>
+    <p class="muted small">Period {{ usage.period }} (UTC). Usage is free during the preview.</p>
+  </div>
+  <div class="card">
+    <h2>Limits</h2>
+    <dl class="stats">
+      <div><dt>Open sessions</dt><dd>{{ limits.sessions_open }} / {{ limits.limits.max_sessions }}</dd></div>
+      <div><dt>Requests / minute</dt><dd>{{ limits.limits.requests_per_minute }}</dd></div>
+      <div><dt>Commands at once</dt><dd>{{ limits.limits.max_concurrent_exec }}</dd></div>
+    </dl>
+    <p class="muted small">Each sandbox: 256 MB RAM, 1 CPU, 512 MB disk, 1–60 s per command.</p>
+  </div>
+  <div class="card">
+    <h2>Internet access</h2>
+    {% if egress %}
+    <ul class="hosts">{% for host in egress %}<li><code>{{ host }}</code></li>{% endfor %}</ul>
+    <p class="muted small">Request it per session with <code>egress=["pypi"]</code>. Everything else is blocked and logged.</p>
+    {% else %}
+    <p>None. Sandboxes have no network access.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section>
+  <h2>Quickstart</h2>
+  <p class="muted">Replace <code>&lt;your key&gt;</code> with a key from <a href="/console/keys">API keys</a>.</p>
+
+  <h3>Python</h3>
+  <div class="code"><button class="copy" type="button" data-copy="py">Copy</button>
+<pre id="py">pip install airlock-sandbox
+
+from airlock_sandbox import Sandbox
+
+with Sandbox(base_url="{{ base_url }}", api_key="&lt;your key&gt;", egress=["pypi"]) as sbx:
+    sbx.run("pip install requests", timeout=60).check()
+    print(sbx.run("python3 -c 'import requests; print(requests.__version__)'").stdout)</pre></div>
+
+  <h3>Claude Code</h3>
+  <div class="code"><button class="copy" type="button" data-copy="mcp">Copy</button>
+<pre id="mcp">claude mcp add airlock --scope user -e SANDBOX_API_URL={{ base_url }} -e SANDBOX_API_KEY=&lt;your key&gt; -e AIRLOCK_EGRESS=pypi -- uvx --from "airlock-sandbox[mcp]" airlock-sandbox-mcp</pre></div>
+
+  <h3>curl</h3>
+  <div class="code"><button class="copy" type="button" data-copy="curl">Copy</button>
+<pre id="curl">curl -X POST {{ base_url }}/v1/sessions -H "X-API-Key: &lt;your key&gt;" -H "Content-Type: application/json" -d "{}"</pre></div>
+</section>
+{% endblock %}

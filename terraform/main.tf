@@ -118,13 +118,15 @@ resource "aws_security_group" "sandbox_sg" {
 }
 
 # 3. Application bundle: an explicit allowlist so .env, .venv and .git never ship.
+#    Everything under src/ (code, console templates and static files) except Python
+#    caches, plus the Dockerfile and requirements. Files are read as UTF-8 text.
 data "archive_file" "app" {
   type        = "zip"
   output_path = "${path.module}/.build/app.zip"
 
   dynamic "source" {
     for_each = setunion(
-      fileset("${path.module}/..", "src/**/*.py"),
+      [for f in fileset("${path.module}/..", "src/**") : f if !strcontains(f, "__pycache__") && !endswith(f, ".pyc")],
       ["Dockerfile", "requirements.txt"],
     )
     content {
@@ -301,19 +303,26 @@ resource "aws_instance" "sandbox_host" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    aws_region         = var.aws_region
-    app_bundle_s3      = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
-    api_key_param      = aws_ssm_parameter.api_keys.name
-    domain_name        = var.domain_name
-    session_ttl_secs   = var.session_ttl_seconds
-    egress_policy_json = jsonencode(var.egress_policy)
-    workspaces_disk_gb = var.workspaces_disk_gb
-    workspace_slots    = var.workspace_slots
-    workspace_quota_mb = var.workspace_quota_mb
-    tenant_limits_json = jsonencode(var.tenant_limits)
-    public_ip          = aws_eip.sandbox.public_ip
-    admin_key_param    = aws_ssm_parameter.admin_key.name
-    keys_table         = aws_dynamodb_table.api_keys.name
+    aws_region           = var.aws_region
+    app_bundle_s3        = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
+    api_key_param        = aws_ssm_parameter.api_keys.name
+    domain_name          = var.domain_name
+    session_ttl_secs     = var.session_ttl_seconds
+    egress_policy_json   = jsonencode(var.egress_policy)
+    workspaces_disk_gb   = var.workspaces_disk_gb
+    workspace_slots      = var.workspace_slots
+    workspace_quota_mb   = var.workspace_quota_mb
+    tenant_limits_json   = jsonencode(var.tenant_limits)
+    public_ip            = aws_eip.sandbox.public_ip
+    admin_key_param      = aws_ssm_parameter.admin_key.name
+    keys_table           = aws_dynamodb_table.api_keys.name
+    accounts_table       = aws_dynamodb_table.console.name
+    console_base_url     = var.domain_name != "" ? "https://${var.domain_name}" : "https://${aws_eip.sandbox.public_ip}"
+    github_client_id     = var.github_oauth_client_id
+    github_secret_param  = local.console_enabled ? aws_ssm_parameter.github_client_secret[0].name : ""
+    console_secret_param = aws_ssm_parameter.console_secret.name
+    console_admins       = join(",", var.console_admins)
+    console_signup       = var.console_signup
   })
 
   # A new code bundle produces new user_data, which replaces the host.
