@@ -45,7 +45,8 @@ def test_entries_come_back_newest_first_with_their_details(log):
     entries, cursor = log.list("acme")
     assert [e["command"] for e in entries] == ["python -m pytest", "ls"] and cursor is None
     first = entries[0]
-    assert first["exit_code"] == 1 and first["timed_out"] is True and first["actor"] == "key abc"
+    assert first["exit_code"] == 1 and isinstance(first["exit_code"], int)   # not 1.0 from DynamoDB
+    assert first["timed_out"] is True and first["actor"] == "key abc"
     assert first["session_id"] == "sbx_1" and first["duration_s"] == 0.5 and first["kind"] == "exec"
 
 

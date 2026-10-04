@@ -78,8 +78,14 @@ class _DynamoAudit:
             if "LastEvaluatedKey" not in page:
                 break
             kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-        return [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in i.items() if k != "tenant"}
-                for i in items[:limit]]
+        return [{k: _number(v) for k, v in i.items() if k != "tenant"} for i in items[:limit]]
+
+
+def _number(value):
+    """DynamoDB returns every number as Decimal: exit codes come back as ints, times as floats."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    return value
 
 
 class AuditLog:
