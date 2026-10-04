@@ -3,13 +3,16 @@
 [![CI](https://github.com/farvez/agent-sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/farvez/agent-sandbox/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/airlock-sandbox)](https://pypi.org/project/airlock-sandbox/)
 [![Python](https://img.shields.io/pypi/pyversions/airlock-sandbox)](https://pypi.org/project/airlock-sandbox/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/server-AGPL--3.0-blue)](LICENSE)
+[![SDK: MIT](https://img.shields.io/badge/SDK-MIT-blue)](sdk/python/LICENSE)
 
 **Isolated, network-controlled sandboxes for AI coding agents.** Every command an agent runs
 executes in a throwaway gVisor container with no network by default, hard memory/CPU/process
 limits, a read-only root filesystem and a disk quota — while files persist across commands in
 the session's workspace. Use it from Python, from Claude Code (MCP), over REST, or in the
 browser.
+
+Created by **Farvez Anzam** ([@farvez](https://github.com/farvez)).
 
 - **Safe by default:** gVisor user-space kernel, no Linux capabilities, non-root, no network
 - **Internet only where you allow it:** per-tenant HTTPS allowlists (e.g. PyPI), every connection logged
@@ -84,4 +87,12 @@ Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Copyright © 2026 Farvez Anzam.
+
+- **Server, console and deployment:** [GNU AGPL-3.0](LICENSE). You can use, study, change and
+  self-host it; if you run a modified version as a network service, you must offer its users
+  your source code.
+- **Python SDK, CLI and MCP server** (`sdk/python`, `pip install airlock-sandbox`): [MIT](sdk/python/LICENSE),
+  so you can use it in any project, open or closed.
+
+See [NOTICE](NOTICE) for details, and [CITATION.cff](CITATION.cff) to cite the project.

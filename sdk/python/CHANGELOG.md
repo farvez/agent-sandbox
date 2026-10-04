@@ -2,6 +2,10 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.4.1 — 2026-10-04
+
+- Package metadata: author is now listed as Farvez Anzam. No code changes; still MIT.
+
 ## 0.4.0 — 2026-10-04
 
 - `Sandbox.import_repo(repo, ref=None, path=None)`: import a public GitHub repository

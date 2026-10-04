@@ -182,4 +182,5 @@ sbx.health()
 
 ## License
 
-MIT
+MIT © 2026 Farvez Anzam. The Airlock server it talks to is AGPL-3.0; see the
+[main repository](https://github.com/farvez/agent-sandbox).

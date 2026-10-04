@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []  # standard library only
-authors = [{ name = "farvez" }]
+authors = [{ name = "Farvez Anzam" }]
 keywords = ["ai", "agents", "sandbox", "code-execution", "gvisor", "llm", "tools", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",

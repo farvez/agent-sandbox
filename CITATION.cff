@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use or build on Airlock, please cite it as below."
+title: "Airlock: isolated, network-controlled sandboxes for AI coding agents"
+type: software
+authors:
+  - given-names: Farvez
+    family-names: Anzam
+repository-code: "https://github.com/farvez/agent-sandbox"
+url: "https://airlock.complyoo.com"
+license: AGPL-3.0-only
+date-released: "2026-10-04"
+keywords:
+  - ai-agents
+  - sandbox
+  - gvisor
+  - code-execution
+  - mcp
