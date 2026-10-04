@@ -24,6 +24,9 @@ CONSOLE_SECRET_PARAM="${console_secret_param}"
 CONSOLE_ADMINS="${console_admins}"
 CONSOLE_SIGNUP="${console_signup}"
 DOMAIN="${domain_name}"
+TLS_STATE_S3="${tls_state_s3}"
+ACME_EMAIL="${acme_email}"
+CADDY_DATA=/var/lib/caddy/.local/share/caddy
 SESSION_TTL="${session_ttl_secs}"
 EGRESS_LOG_DIR=/var/lib/agent-sandbox/egress
 WS_ROOT=/var/lib/agent-sandbox/workspaces
@@ -201,8 +204,18 @@ apt-get update -y
 apt-get install -y caddy
 
 if [ -n "$DOMAIN" ]; then
-  # Public certificate from Let's Encrypt (needs DNS pointing here and port 80 open)
-  cat > /etc/caddy/Caddyfile <<EOF
+  # Public certificate from Let's Encrypt (needs DNS pointing here and port 80 open).
+  # With a contact email, Caddy falls back to ZeroSSL if Let's Encrypt refuses.
+  : > /etc/caddy/Caddyfile
+  if [ -n "$ACME_EMAIL" ]; then
+    cat > /etc/caddy/Caddyfile <<EOF
+{
+	email $ACME_EMAIL
+}
+
+EOF
+  fi
+  cat >> /etc/caddy/Caddyfile <<EOF
 $DOMAIN {
 	reverse_proxy 127.0.0.1:8000
 }
@@ -221,6 +234,13 @@ https://$PUBLIC_IP {
 EOF
 fi
 
+# Certificates survive instance replacement: restore Caddy's storage from S3 before it
+# starts (otherwise every redeploy requests a new certificate and soon hits Let's
+# Encrypt's 5-per-week limit); monitor.sh backs it up again every 10 minutes.
+mkdir -p "$CADDY_DATA"
+aws s3 sync --region "$AWS_REGION" --only-show-errors "$TLS_STATE_S3/" "$CADDY_DATA/"   || echo "No saved TLS state yet (first deploy)"
+chown -R caddy:caddy /var/lib/caddy
+
 systemctl restart caddy
 
 # 8. Self-monitoring: every minute, check /healthz through Caddy and TLS, report
@@ -229,6 +249,8 @@ systemctl restart caddy
 cat > /etc/agent-sandbox/monitor.env <<EOF
 AWS_REGION=$AWS_REGION
 DOMAIN=$DOMAIN
+TLS_STATE_S3=$TLS_STATE_S3
+CADDY_DATA=$CADDY_DATA
 EOF
 
 cat > "$APP_DIR/monitor.sh" <<'MON'
@@ -261,6 +283,11 @@ put RootDiskUsedPercent "$(df --output=pcent / | tail -1 | tr -dc '0-9')" Percen
 put WorkspacesDiskUsedPercent "$(df --output=pcent /var/lib/agent-sandbox/workspaces | tail -1 | tr -dc '0-9')" Percent
 
 find /var/lib/agent-sandbox/egress -maxdepth 1 -name '*.jsonl' -mtime +30 -delete
+
+# Back up Caddy's certificates and ACME account every 10 minutes (only changes are uploaded).
+if [ $((10#$(date +%M) % 10)) -eq 0 ] && [ -d "$CADDY_DATA/certificates" ]; then
+  aws s3 sync --region "$AWS_REGION" --only-show-errors --exclude 'locks/*' "$CADDY_DATA/" "$TLS_STATE_S3/"
+fi
 MON
 chmod 0755 "$APP_DIR/monitor.sh"
 

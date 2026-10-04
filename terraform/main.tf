@@ -231,6 +231,18 @@ resource "aws_iam_role_policy" "sandbox_host" {
         Resource = "${aws_s3_bucket.artifacts.arn}/*"
       },
       {
+        # Caddy's certificates and ACME account, kept across instance replacements.
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:DeleteObject"]
+        Resource = "${aws_s3_bucket.artifacts.arn}/tls/*"
+      },
+      {
+        Effect    = "Allow"
+        Action    = ["s3:ListBucket"]
+        Resource  = aws_s3_bucket.artifacts.arn
+        Condition = { StringLike = { "s3:prefix" = ["tls/*", "tls/"] } }
+      },
+      {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
         Resource = [aws_ssm_parameter.api_keys.arn, aws_ssm_parameter.admin_key.arn]
@@ -323,6 +335,8 @@ resource "aws_instance" "sandbox_host" {
     console_secret_param = aws_ssm_parameter.console_secret.name
     console_admins       = join(",", var.console_admins)
     console_signup       = var.console_signup
+    tls_state_s3         = "s3://${aws_s3_bucket.artifacts.id}/tls/caddy"
+    acme_email           = var.acme_email
   })
 
   # A new code bundle produces new user_data, which replaces the host.

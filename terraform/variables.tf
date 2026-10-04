@@ -86,6 +86,12 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "acme_email" {
+  description = "Contact email for TLS certificates (Let's Encrypt expiry notices). Setting it also lets Caddy fall back to ZeroSSL when Let's Encrypt refuses, e.g. its 5-certificates-per-week limit."
+  type        = string
+  default     = ""
+}
+
 variable "monthly_budget_usd" {
   description = "Monthly AWS cost budget; an email goes out at 80% of actual spend and when the forecast exceeds 100%."
   type        = number

@@ -471,7 +471,10 @@ when the month's forecast exceeds 100%.
   would switch the server back to a self-signed certificate.
 - **TLS:** set `-var domain_name=sandbox.example.com` (DNS A record → instance IP) for a
   Let's Encrypt certificate; without it Caddy serves a self-signed certificate on the IP
-  (`curl -k`).
+  (`curl -k`). Caddy's certificates and ACME account are backed up to the artifacts bucket
+  (`tls/caddy/`, every 10 minutes) and restored on boot, so redeploys reuse the certificate
+  instead of requesting a new one (Let's Encrypt allows 5 per week per domain). Set
+  `acme_email` to get expiry notices and a ZeroSSL fallback if Let's Encrypt refuses.
 - **Shell access:** no SSH. Use `aws ssm start-session --target <instance_id>`.
   Provisioning log: `/var/log/user_data.log`; service log: `journalctl -u agent-sandbox`.
 - **Stable address:** the API sits on an Elastic IP, so its URL (and the self-signed
