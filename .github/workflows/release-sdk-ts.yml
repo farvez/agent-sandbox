@@ -42,5 +42,5 @@ jobs:
 
       - name: Publish
         run: |
-          npm install -g npm@latest   # trusted publishing needs a recent npm
+          npm install -g npm@11   # trusted publishing needs npm 11.5.1+; npm 12 needs a newer Node
           npm publish --access public
