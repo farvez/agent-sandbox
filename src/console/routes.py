@@ -8,6 +8,7 @@ directly — no admin key in the browser.
 from __future__ import annotations
 
 import functools
+import hashlib
 import os
 import re
 import secrets
@@ -32,6 +33,20 @@ from src.console.auth import (
 from src.console.terminal import HOME, MAX_COMMAND_CHARS, clean_cwd, split_cwd, wrap_command
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+def asset_version(directory: str = STATIC_DIR) -> str:
+    """A short hash of the console's CSS and JS. Pages link `console.css?v=<hash>`, so every
+    change gets a new URL and browsers never keep using a stale copy after a deploy."""
+    digest = hashlib.sha256()
+    for name in sorted(os.listdir(directory)):
+        with open(os.path.join(directory, name), "rb") as f:
+            digest.update(name.encode() + b"/" + f.read())
+    return digest.hexdigest()[:12]
+
+
+ASSET_VERSION = asset_version()
 FLASH_COOKIE = "airlock_flash"
 # A GitHub user who signed in without an invite: their verified identity, so they can
 # request one without a console session (and nobody can request in someone else's name).
@@ -133,7 +148,7 @@ def build_console_router(
         response = TEMPLATES.TemplateResponse(request, template, {
             "session": session, "is_admin": admin,
             "base_url": config.base_url, "workspaces_enabled": sessions is not None,
-            "audit_enabled": audit_log() is not None,
+            "audit_enabled": audit_log() is not None, "asset_version": ASSET_VERSION,
             "pending_requests": len(accounts().list_requests()) if admin else 0,
             "flash": flash, **context,
         }, status_code=status_code)

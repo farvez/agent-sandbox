@@ -450,3 +450,16 @@ def test_privacy_page_states_retention_and_shows_the_contact(tmp_path):
     assert "privacy@example.com" in page
     for promise in ("90 days", "30 days", "14 days", "Never the command's output", "read:user"):
         assert promise in page
+
+
+
+def test_assets_are_versioned_by_content(console, tmp_path):
+    from src.console.routes import ASSET_VERSION, asset_version
+
+    page = console[0].get("/console").text
+    assert f"/console/static/console.css?v={ASSET_VERSION}" in page
+    assert f"/console/static/console.js?v={ASSET_VERSION}" in page
+    (tmp_path / "a.css").write_text("body{}")
+    before = asset_version(str(tmp_path))
+    (tmp_path / "a.css").write_text("body{color:red}")
+    assert asset_version(str(tmp_path)) != before     # any change gives browsers a new URL
