@@ -264,6 +264,23 @@ def build_server(holder: SandboxHolder) -> MCPServer:
 
         return await run(fetch)
 
+    @server.tool(annotations=ToolAnnotations(title="Activity log", read_only_hint=True))
+    async def activity(limit: int = 20) -> str:
+        """Show recent commands run in this tenant's sandboxes (newest first): command, exit code, duration."""
+
+        def fetch(sbx: Sandbox) -> str:
+            entries = sbx.audit(limit=max(1, min(int(limit), 100)))["entries"]
+            if not entries:
+                return "No commands recorded yet."
+            lines = []
+            for e in entries:
+                result = ("timed out" if e.get("timed_out") else "out of memory" if e.get("oom_killed")
+                          else "failed" if e.get("exit_code") is None else f"exit {e['exit_code']}")
+                lines.append(f"{result:13} {e.get('command', '')}   [{e.get('session_id', '')}]")
+            return "\n".join(lines)
+
+        return await run(fetch)
+
     @server.tool(annotations=ToolAnnotations(title="Sandbox info", read_only_hint=True))
     async def sandbox_info() -> str:
         """Show the sandbox's session, internet access, disk quota and the tenant's limits."""

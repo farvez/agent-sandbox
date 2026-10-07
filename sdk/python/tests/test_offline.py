@@ -79,4 +79,4 @@ def test_mcp_server_lists_tools_without_contacting_the_server():
             return [t.name for t in (await client.list_tools()).tools]
 
     assert asyncio.run(go()) == ["run_command", "write_file", "read_file", "list_files",
-                                 "import_repo", "egress_log", "sandbox_info", "reset_sandbox"]
+                                 "import_repo", "egress_log", "activity", "sandbox_info", "reset_sandbox"]

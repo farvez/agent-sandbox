@@ -429,3 +429,18 @@ def test_import_repo(sbx, fake_github_import):
         sbx.import_repo("someone/private")
     with pytest.raises(ValidationError):
         sbx.import_repo("not a repo")
+
+
+# ---------------------------------------------------------------- activity log
+
+
+def test_audit_returns_this_tenants_history(sbx, monkeypatch, tmp_path):
+    from src.api.audit import AuditLog, _SqliteAudit
+
+    monkeypatch.setattr(server, "AUDIT", AuditLog(_SqliteAudit(str(tmp_path / "audit.db"))))
+    sbx.run("echo one")
+    sbx.run("fail now")
+    page = sbx.audit(limit=1)
+    assert [e["command"] for e in page["entries"]] == ["fail now"] and page["entries"][0]["exit_code"] == 3
+    older = sbx.audit(limit=5, before=page["next"])
+    assert [e["command"] for e in older["entries"]] == ["echo one"] and older["next"] is None

@@ -23,6 +23,7 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | GET/POST | `/v1/admin/keys` | `?tenant=` / `{tenant, name?}` | admin key only: list all / issue for any tenant |
 | DELETE | `/v1/admin/keys/{key_id}` | — | admin key only: revoke any key |
 | GET | `/v1/usage` | — | `{tenant_id, limits, sessions_open, commands_running, requests_available}` |
+| GET/POST/DELETE | `/mcp` | MCP Streamable HTTP; key in `X-API-Key` or `Authorization: Bearer`; `?egress=pypi`, `?workspace=name` | Remote MCP endpoint: the same tools as the local MCP server plus `activity`; one sandbox per key, egress and workspace · `401` bad key · `429` rate limit |
 | GET | `/v1/audit` | `?limit=` (≤500) `&before=` | `{tenant_id, entries: [{ts, session_id, actor, kind, command, exit_code, duration_s, timed_out, oom_killed, detail}], next, retention_days}` — this tenant's command history, newest first; pass `next` as `before` for older entries · `501` when disabled |
 
 `exec` output is plain text with `[STDOUT]:`, `[STDERR]:`, `[WARNING]:` (OOM kill or over disk quota),

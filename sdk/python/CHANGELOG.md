@@ -2,6 +2,15 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.5.0 — 2026-10-08
+
+- `Sandbox.audit(limit=100, before=None)`: this tenant's command history (commands and outcomes,
+  never output), newest first, with a cursor for older pages.
+- MCP server: new `activity` tool.
+- Docs: Claude Code can now connect to the server's **remote MCP endpoint** with just a URL and
+  key (`claude mcp add --transport http …`), with nothing to install. The local
+  `airlock-sandbox-mcp` keeps working; see the README for the startup-timeout workaround on Windows.
+
 ## 0.4.1 — 2026-10-04
 
 - Package metadata: author is now listed as Farvez Anzam. No code changes; still MIT.

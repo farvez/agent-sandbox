@@ -38,10 +38,10 @@ with Sandbox(base_url="https://airlock.complyoo.com", api_key="<key>", egress=["
     print(sbx.run("cd itsdangerous && PYTHONPATH=src python -m pytest -q", timeout=60).stdout)
 ```
 
-**Claude Code** — give Claude a sandbox to run code in:
+**Claude Code** — give Claude a sandbox to run code in, nothing to install:
 
 ```bash
-claude mcp add airlock --scope user -e SANDBOX_API_URL=https://airlock.complyoo.com -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi -- uvx --from "airlock-sandbox[mcp]" airlock-sandbox-mcp
+claude mcp add --transport http --scope user airlock "https://airlock.complyoo.com/mcp?egress=pypi" --header "X-API-Key: <key>"
 ```
 
 More in the [SDK guide](sdk/python/README.md): typed errors and retries, ready-made agent tools
@@ -77,7 +77,6 @@ workspace is wiped. Details: [architecture and security model](docs/architecture
 
 - Console: private repositories (GitHub App), a full PTY terminal, free-plan quotas from metering
 - Shared state and a persistent session store for more than one API server
-- Remote (HTTP) MCP endpoint, so clients connect with just a URL and key
 - JavaScript/TypeScript SDK
 - Egress: human approval for new hosts, per-tenant bandwidth limits
 

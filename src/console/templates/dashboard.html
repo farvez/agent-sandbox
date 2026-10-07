@@ -65,7 +65,8 @@ with Sandbox(base_url="{{ base_url }}", api_key="&lt;your key&gt;", egress=["pyp
 
   <h3>Claude Code</h3>
   <div class="code"><button class="copy" type="button" data-copy="mcp">Copy</button>
-<pre id="mcp">claude mcp add airlock --scope user -e SANDBOX_API_URL={{ base_url }} -e SANDBOX_API_KEY=&lt;your key&gt; -e AIRLOCK_EGRESS=pypi -- uvx --from "airlock-sandbox[mcp]" airlock-sandbox-mcp</pre></div>
+<pre id="mcp">claude mcp add --transport http --scope user airlock "{{ base_url }}/mcp?egress=pypi" --header "X-API-Key: &lt;your key&gt;"</pre></div>
+  <p class="muted small">Connects over HTTPS, nothing to install. Add <code>&amp;workspace=name</code> to the URL for a separate sandbox.</p>
 
   <h3>curl</h3>
   <div class="code"><button class="copy" type="button" data-copy="curl">Copy</button>

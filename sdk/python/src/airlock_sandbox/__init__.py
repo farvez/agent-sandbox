@@ -21,7 +21,7 @@ from airlock_sandbox.errors import (
 )
 from airlock_sandbox.sandbox import CommandResult, Files, Sandbox
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 __all__ = [
     "Sandbox",

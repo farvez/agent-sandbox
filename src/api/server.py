@@ -7,7 +7,7 @@ import secrets
 import threading
 import logging
 from typing import Dict, List, Optional, Set, Tuple
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Security, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -304,7 +304,10 @@ async def lifespan(app: FastAPI):
         restored = await asyncio.to_thread(restore_sessions)
         logger.info("Restored %d session(s) after restart", restored)
     sweeper_task = asyncio.create_task(session_ttl_sweeper())
-    yield
+    async with AsyncExitStack() as stack:
+        if REMOTE_MCP is not None:
+            await stack.enter_async_context(REMOTE_MCP.lifespan())
+        yield
     sweeper_task.cancel()
     if SESSION_STATE_PATH:
         # A restart, not the end: leave workspaces and proxies running for the next process.
@@ -330,8 +333,8 @@ app = FastAPI(
 )
 
 
-def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
-    """Authenticates the caller and returns their tenant ID."""
+def tenant_for_key(header_key: Optional[str]) -> Optional[str]:
+    """The tenant an API key belongs to, or None."""
     tenant_id = None
     if header_key:
         if KEYSTORE is not None:
@@ -342,6 +345,12 @@ def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
         for key, tenant in API_KEYS:
             if secrets.compare_digest(presented, key):
                 tenant_id = tenant
+    return tenant_id
+
+
+def verify_api_key(header_key: Optional[str] = Security(api_key_header)) -> str:
+    """Authenticates the caller and returns their tenant ID."""
+    tenant_id = tenant_for_key(header_key)
     if tenant_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -666,6 +675,105 @@ def audit_log(limit: int = 100, before: Optional[str] = None, tenant_id: str = S
 def destroy_session(session_id: str, tenant_id: str = Security(authorize)):
     end_session(session_id, tenant_id)
     return {"status": "terminated", "session_id": session_id}
+
+
+# ------------------------------------------------------------------ remote MCP endpoint (/mcp)
+
+class McpOps:
+    """What the remote MCP endpoint does with sessions: the same checks, metering and audit
+    log as the REST API. Tenants come from RemoteMcp's per-request authentication."""
+
+    actor_for_key = staticmethod(actor_for_key)
+
+    @staticmethod
+    def authenticate(key: str) -> Optional[str]:
+        return tenant_for_key(key)
+
+    @staticmethod
+    def check_rate(tenant_id: str) -> None:
+        from src.api.mcp_remote import AuthError
+
+        try:
+            LIMITS.check_rate(tenant_id)
+        except LimitExceeded as e:
+            raise AuthError(429, str(e), e.retry_after)
+
+    @staticmethod
+    def start(tenant_id: str, egress: List[str]) -> str:
+        return start_session(tenant_id, egress_request=egress).session_id
+
+    @staticmethod
+    def exists(tenant_id: str, session_id: str) -> bool:
+        with sessions_lock:
+            rec = active_sessions.get(session_id)
+        return rec is not None and rec.tenant_id == tenant_id
+
+    @staticmethod
+    def end(tenant_id: str, session_id: str) -> None:
+        try:
+            end_session(session_id, tenant_id)
+        except HTTPException:
+            pass
+
+    @staticmethod
+    def run(tenant_id: str, session_id: str, command: str, timeout: int, actor: str) -> str:
+        rec = get_authorized_session(session_id, tenant_id)
+        return format_result(run_in_session(rec, command, timeout, actor=actor))
+
+    @staticmethod
+    def write_file(tenant_id: str, session_id: str, path: str, content: str) -> str:
+        return get_authorized_session(session_id, tenant_id).workspace.write_file(path, content)
+
+    @staticmethod
+    def read_file(tenant_id: str, session_id: str, path: str) -> str:
+        return get_authorized_session(session_id, tenant_id).workspace.read_file(path)
+
+    @staticmethod
+    def import_repo(tenant_id: str, session_id: str, repo: str, ref: Optional[str], path: Optional[str], actor: str) -> dict:
+        return import_repo_into(get_authorized_session(session_id, tenant_id), repo, ref, path, actor=actor)
+
+    @staticmethod
+    def egress_events(tenant_id: str, session_id: str, limit: int) -> List[dict]:
+        return get_authorized_session(session_id, tenant_id).workspace.egress_events(limit=limit)
+
+    @staticmethod
+    def audit(tenant_id: str, limit: int) -> List[dict]:
+        return AUDIT.list(tenant_id, limit)[0] if AUDIT is not None else []
+
+    @staticmethod
+    def info(tenant_id: str, session_id: str) -> str:
+        rec = get_authorized_session(session_id, tenant_id)
+        usage = LIMITS.usage(tenant_id)
+        limits = usage.get("limits", {})
+        return "\n".join([
+            f"Session: {session_id} (tenant {tenant_id})",
+            f"Internet: {', '.join(rec.egress) if rec.egress else 'none'}",
+            f"Allowed to request: {', '.join(tenant_egress(tenant_id)) or 'nothing'} (add ?egress=… to the MCP URL)",
+            f"Disk quota: {rec.workspace.quota_bytes // 2**20} MB",
+            f"Limits: {limits.get('max_sessions')} sessions, {limits.get('requests_per_minute')} requests/min, "
+            f"{limits.get('max_concurrent_exec')} concurrent commands",
+        ])
+
+    @staticmethod
+    def describe_error(e: Exception) -> str:
+        if isinstance(e, HTTPException):
+            return str(e.detail)
+        if isinstance(e, (LimitExceeded, PermissionError, QuotaExceededError)):
+            return str(e)
+        logger.exception("MCP tool failed")
+        return "The sandbox failed to run that; try again, or reset_sandbox."
+
+
+try:
+    from src.api.mcp_remote import RemoteMcp
+except ImportError:          # the mcp package isn't installed: no remote MCP endpoint
+    RemoteMcp = None
+
+REMOTE_MCP = RemoteMcp(McpOps(), version=app.version) if RemoteMcp is not None else None
+if REMOTE_MCP is not None:
+    from starlette.routing import Route
+
+    app.router.routes.append(Route("/mcp", endpoint=REMOTE_MCP, methods=["GET", "POST", "DELETE"]))
 
 
 # ------------------------------------------------------------------ developer console

@@ -93,8 +93,23 @@ keeping the beginning and the end.
 
 ## MCP server (Claude Code, Claude Desktop, other MCP clients)
 
-The package includes an MCP server that gives any MCP client a sandbox as tools — no code
-needed. Install with the `mcp` extra (Python 3.10+):
+**Remote (recommended): nothing to install.** The server has an MCP endpoint at `/mcp`;
+connect with a URL and your key:
+
+```bash
+claude mcp add --transport http --scope user airlock "https://<server>/mcp?egress=pypi" --header "X-API-Key: <key>"
+```
+
+- `?egress=pypi` (comma-separated hosts or presets) gives the sandbox internet access, within
+  your tenant's policy; leave it out for no network.
+- There's one sandbox per key, reused by every call and reconnect; it closes after 30 minutes
+  idle. Add `&workspace=<name>` for a separate sandbox.
+- Tools: `run_command`, `write_file`, `read_file`, `list_files`, `import_repo`, `egress_log`,
+  `activity`, `sandbox_info`, `reset_sandbox`. Commands show up in the console's Activity page
+  as `mcp key <id>`.
+
+**Local:** the package also includes an MCP server that runs on your machine over stdio and
+talks to the API. Install with the `mcp` extra (Python 3.10+):
 
 ```bash
 pip install "airlock-sandbox[mcp]"
@@ -145,7 +160,7 @@ files), and `uvx` adds an install on the first start after each release. Two fix
 On Windows, if Claude Desktop can't find the command, use its full path (`where airlock-sandbox-mcp`).
 
 **Tools:** `run_command`, `write_file`, `read_file`, `list_files`, `import_repo`, `egress_log`,
-`sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
+`activity`, `sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
 on first use and deleted when the client disconnects; files persist between commands
 within it. `AIRLOCK_EGRESS` (or `--egress`) sets which hosts the sandbox may reach — it
 must be allowed by your tenant's policy; leave it unset for no network.
@@ -191,6 +206,11 @@ Or from the shell: `airlock-sandbox-keys create --name ci`, `airlock-sandbox-key
 ```python
 sbx.usage()    # {"limits": {...}, "sessions_open": 1, "commands_running": 0, "requests_available": 118}
 sbx.health()
+
+page = sbx.audit(limit=50)          # this tenant's command history, newest first (never output)
+for e in page["entries"]:
+    print(e["exit_code"], e["command"], e["actor"])
+older = sbx.audit(before=page["next"]) if page["next"] else None
 ```
 
 ## License

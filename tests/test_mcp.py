@@ -12,7 +12,7 @@ from airlock_sandbox import Sandbox
 from airlock_sandbox.mcp_server import SandboxHolder, build_server
 from tests.test_sdk import KEY, api_url, fake_github_import, fresh_state  # noqa: F401  (pytest fixtures)
 
-TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "sandbox_info", "reset_sandbox"]
+TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "activity", "sandbox_info", "reset_sandbox"]
 
 
 def make_holder(url, egress=None):
@@ -188,3 +188,15 @@ def test_import_repo_tool(api_url, fake_github_import):
     ok, missing = call(make_holder(api_url), steps)
     assert not ok.is_error and text(ok) == "Imported psf/requests@HEAD: 5 files in /workspace/requests"
     assert missing.is_error and "wasn't found" in text(missing)
+
+
+def test_activity_tool(api_url, monkeypatch, tmp_path):
+    from src.api.audit import AuditLog, _SqliteAudit
+
+    monkeypatch.setattr(server, "AUDIT", AuditLog(_SqliteAudit(str(tmp_path / "audit.db"))))
+
+    async def steps(c):
+        await c.call_tool("run_command", {"command": "python3 x.py"})
+        return await c.call_tool("activity", {"limit": 5})
+    result = call(make_holder(api_url), steps)
+    assert not result.is_error and "exit 0" in text(result) and "python3 x.py" in text(result)

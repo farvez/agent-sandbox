@@ -243,6 +243,16 @@ class Sandbox:
         """This tenant's limits and current usage."""
         return self._http.request("GET", "/v1/usage")
 
+    def audit(self, limit: int = 100, before: Optional[str] = None) -> dict:
+        """This tenant's command history, newest first: {"entries": [...], "next": cursor or None}.
+
+        Each entry has ts, session_id, actor, kind ("exec" or "import"), command, exit_code,
+        duration_s, timed_out and oom_killed; command output is never stored. Pass `next`
+        back as `before` for older entries. Needs a server with the audit log enabled.
+        """
+        query = f"/v1/audit?limit={int(limit)}" + (f"&before={before}" if before else "")
+        return self._http.request("GET", query)
+
     def egress_policy(self) -> List[str]:
         """Hosts this tenant's sessions may request."""
         return self._http.request("GET", "/v1/egress/policy")["allowed"]
