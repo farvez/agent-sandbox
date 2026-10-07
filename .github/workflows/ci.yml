@@ -28,11 +28,40 @@ jobs:
       - name: Build sandbox image
         run: docker build -t sandbox-base:latest .
 
+      # So tests/test_sdk_typescript.py can run the TypeScript SDK against the API.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the TypeScript SDK
+        working-directory: sdk/typescript
+        run: npm ci && npm run build
+
       # Runs everything, including the Docker tests (network/OOM/timeout/read-only
       # root, egress through the proxy) and the symlink-escape tests that are
       # skipped on Windows. -rs lists anything that still skipped.
       - name: Run tests
         run: pytest -q -rs
+
+  sdk-typescript:
+    name: TypeScript SDK (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "22"]   # oldest supported and current
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build, unit tests, type check
+        run: npm ci && npm test
+      - name: Check the published contents
+        run: npm pack --dry-run
 
   sdk:
     name: SDK wheel (Python ${{ matrix.python }})

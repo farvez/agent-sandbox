@@ -46,6 +46,7 @@ python scripts/smoke_test.py      # end-to-end check; reads SANDBOX_API_KEY and 
 │   ├── sandbox/            # SandboxedWorkspace, quota'd workspace pool, gVisor detection
 │   └── agent/              # LLM coding agent (tool-calling loop) and its tools
 ├── sdk/python/             # airlock-sandbox: the Python SDK, CLI and MCP server (on PyPI)
+├── sdk/typescript/         # airlock-sandbox: the TypeScript SDK (on npm)
 ├── terraform/              # AWS deployment (bootstrap/ creates the state bucket)
 ├── tests/                  # pytest suite
 ├── evals/                  # agent benchmarks: functional bug fixes + an exfiltration attempt
@@ -149,6 +150,9 @@ pytest -m "not docker" # fast unit tests only
 | `tests/test_agent_loop.py` | Agent loop with a scripted fake model: tool errors, bad JSON, truncation, iteration limit |
 | `tests/test_runner.py`, `tests/test_tracer_parse.py` | The learning modules: runner and `strace -c` parsing |
 | `sdk/python/tests/` | Offline SDK checks against the built wheel on Python 3.9 and 3.13 |
+| `sdk/typescript/test/` | TypeScript SDK: offline tests with a fake server (lifecycle, errors, retries, tools, CommonJS) and a compile check of the public types, on Node 18 and 22 |
+| `tests/test_sdk_typescript.py` | The built TypeScript SDK against the real API over HTTP |
+| `tests/test_mcp_remote.py` | The remote MCP endpoint through a real MCP client over HTTP: tools, one sandbox per key and workspace, auth, tenant isolation, egress from the URL, audit |
 
 Symlink tests need Linux, or Developer Mode on Windows; they skip otherwise.
 
@@ -160,3 +164,9 @@ builds and publishes to PyPI with trusted publishing (no stored token). Running 
 manually publishes to TestPyPI. One-time setup: on pypi.org and test.pypi.org, add a pending
 publisher for project `airlock-sandbox`, owner `farvez`, repository `agent-sandbox`, workflow
 `release-sdk.yml`, environment `pypi` / `testpypi`.
+
+**TypeScript SDK:** bump `version` in `sdk/typescript/package.json` and `src/version.ts` (the
+build refuses a mismatch), add a `CHANGELOG.md` entry, then push a tag `sdk-ts-v<version>`;
+`.github/workflows/release-sdk-ts.yml` tests and publishes to npm with trusted publishing. The
+very first version is published by hand (`cd sdk/typescript && npm login && npm publish`),
+because npm only lets you set up a trusted publisher for a package that exists.

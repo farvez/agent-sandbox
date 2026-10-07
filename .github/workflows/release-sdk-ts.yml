@@ -1,0 +1,46 @@
+name: Release TypeScript SDK
+
+# Publishes sdk/typescript to npm when a tag like sdk-ts-v0.1.0 is pushed:
+#   git tag sdk-ts-v0.1.0 && git push origin sdk-ts-v0.1.0
+#
+# Uses npm trusted publishing: no npm token is stored anywhere. One-time setup, after the
+# first version exists on npm (publish that one from your machine with `npm publish`):
+# npmjs.com → airlock-sandbox → Settings → Trusted Publisher → GitHub Actions, user "farvez",
+# repository "agent-sandbox", workflow "release-sdk-ts.yml".
+
+on:
+  push:
+    tags: ["sdk-ts-v*"]
+
+permissions:
+  contents: read
+  id-token: write   # proves to npm that this workflow is the trusted publisher
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check the tag matches the package version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "sdk-ts-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $version"; exit 1
+          fi
+
+      - name: Build and test
+        run: npm ci && npm test
+
+      - name: Publish
+        run: |
+          npm install -g npm@latest   # trusted publishing needs a recent npm
+          npm publish --access public

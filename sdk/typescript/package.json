@@ -1,0 +1,30 @@
+{
+  "name": "airlock-sandbox",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Airlock: isolated, network-controlled sandboxes for AI coding agents",
+  "license": "MIT",
+  "author": "Farvez Anzam",
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/esm/index.d.ts", "default": "./dist/esm/index.js" },
+      "require": { "types": "./dist/cjs/index.d.ts", "default": "./dist/cjs/index.js" }
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "sideEffects": false,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/unit.test.mjs && tsc -p test/types/tsconfig.json",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": ["ai", "agents", "sandbox", "code-execution", "gvisor", "llm", "tools", "mcp"],
+  "homepage": "https://github.com/farvez/agent-sandbox/tree/main/sdk/typescript",
+  "repository": { "type": "git", "url": "git+https://github.com/farvez/agent-sandbox.git", "directory": "sdk/typescript" },
+  "bugs": { "url": "https://github.com/farvez/agent-sandbox/issues" },
+  "devDependencies": { "typescript": "~5.6.0" }
+}

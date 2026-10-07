@@ -1,6 +1,6 @@
 Airlock (github.com/farvez/agent-sandbox)
 Copyright (C) 2026 Farvez Anzam
-SPDX-License-Identifier: AGPL-3.0-only (server) AND MIT (sdk/python)
+SPDX-License-Identifier: AGPL-3.0-only (server) AND MIT (sdk/python, sdk/typescript)
 
 This repository has two separately licensed parts:
 
@@ -8,9 +8,10 @@ This repository has two separately licensed parts:
     else outside sdk/python/ are licensed under the GNU Affero General Public
     License, version 3 (see LICENSE).
 
-  * The Python SDK, CLI and MCP server in sdk/python/, published on PyPI as
-    "airlock-sandbox", are licensed under the MIT License (see
-    sdk/python/LICENSE).
+  * The Python SDK, CLI and MCP server in sdk/python/ (PyPI: "airlock-sandbox")
+    and the TypeScript SDK in sdk/typescript/ (npm: "airlock-sandbox") are
+    licensed under the MIT License (see sdk/python/LICENSE and
+    sdk/typescript/LICENSE).
 
 Under the AGPL, if you run a modified version of the server as a network
 service, you must offer its users the corresponding source code (section 13).

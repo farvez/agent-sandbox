@@ -38,6 +38,17 @@ with Sandbox(base_url="https://airlock.complyoo.com", api_key="<key>", egress=["
     print(sbx.run("cd itsdangerous && PYTHONPATH=src python -m pytest -q", timeout=60).stdout)
 ```
 
+**TypeScript / JavaScript** (`npm install airlock-sandbox`, Node 18+, Bun, Deno):
+
+```ts
+import { Sandbox } from "airlock-sandbox";
+
+await using sbx = await Sandbox.create({ baseUrl: "https://airlock.complyoo.com", apiKey: "<key>", egress: ["pypi"] });
+await sbx.importRepo("pallets/itsdangerous");
+(await sbx.run("pip install pytest freezegun", { timeout: 60 })).check();
+console.log((await sbx.run("cd itsdangerous && PYTHONPATH=src python -m pytest -q", { timeout: 60 })).stdout);
+```
+
 **Claude Code** — give Claude a sandbox to run code in, nothing to install:
 
 ```bash
@@ -66,7 +77,8 @@ workspace is wiped. Details: [architecture and security model](docs/architecture
 
 | Guide | |
 |-------|---|
-| [SDK, CLI and MCP server](sdk/python/README.md) | Using Airlock from Python, Claude Code and other MCP clients |
+| [Python SDK, CLI and MCP server](sdk/python/README.md) | Using Airlock from Python, Claude Code and other MCP clients |
+| [TypeScript SDK](sdk/typescript/README.md) | Using Airlock from TypeScript / JavaScript (Node, Bun, Deno) |
 | [Architecture and security](docs/architecture.md) | Container hardening, threat model, egress gateway |
 | [REST API](docs/api.md) | Endpoints, API keys, per-tenant limits, server configuration |
 | [Developer console](docs/console.md) | GitHub sign-in, keys, workspaces, repo import, browser terminal |
@@ -91,7 +103,8 @@ Copyright © 2026 Farvez Anzam.
 - **Server, console and deployment:** [GNU AGPL-3.0](LICENSE). You can use, study, change and
   self-host it; if you run a modified version as a network service, you must offer its users
   your source code.
-- **Python SDK, CLI and MCP server** (`sdk/python`, `pip install airlock-sandbox`): [MIT](sdk/python/LICENSE),
-  so you can use it in any project, open or closed.
+- **SDKs:** the Python SDK, CLI and MCP server (`sdk/python`, `pip install airlock-sandbox`) and the
+  TypeScript SDK (`sdk/typescript`, `npm install airlock-sandbox`) are [MIT](sdk/python/LICENSE),
+  so you can use them in any project, open or closed.
 
 See [NOTICE](NOTICE) for details, and [CITATION.cff](CITATION.cff) to cite the project.

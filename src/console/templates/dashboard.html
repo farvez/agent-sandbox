@@ -63,6 +63,15 @@ with Sandbox(base_url="{{ base_url }}", api_key="&lt;your key&gt;", egress=["pyp
     sbx.run("pip install requests", timeout=60).check()
     print(sbx.run("python3 -c 'import requests; print(requests.__version__)'").stdout)</pre></div>
 
+  <h3>TypeScript</h3>
+  <div class="code"><button class="copy" type="button" data-copy="ts">Copy</button>
+<pre id="ts">npm install airlock-sandbox
+
+import { Sandbox } from "airlock-sandbox";
+
+await using sbx = await Sandbox.create({ baseUrl: "{{ base_url }}", apiKey: "&lt;your key&gt;", egress: ["pypi"] });
+console.log((await sbx.run("python3 -V")).stdout);</pre></div>
+
   <h3>Claude Code</h3>
   <div class="code"><button class="copy" type="button" data-copy="mcp">Copy</button>
 <pre id="mcp">claude mcp add --transport http --scope user airlock "{{ base_url }}/mcp?egress=pypi" --header "X-API-Key: &lt;your key&gt;"</pre></div>
