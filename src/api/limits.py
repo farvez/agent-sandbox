@@ -121,6 +121,11 @@ class LimitTracker:
                 )
             self._sessions[tenant_id] = current + 1
 
+    def restore_session(self, tenant_id: str) -> None:
+        """Counts a session taken back after an API restart (it existed already, so no limit check)."""
+        with self._lock:
+            self._sessions[tenant_id] = self._sessions.get(tenant_id, 0) + 1
+
     def close_session(self, tenant_id: str) -> None:
         with self._lock:
             self._sessions[tenant_id] = max(0, self._sessions.get(tenant_id, 0) - 1)

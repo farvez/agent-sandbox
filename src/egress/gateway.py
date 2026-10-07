@@ -91,6 +91,7 @@ class EgressGateway:
         os.makedirs(self.log_dir, exist_ok=True)
         self._lock = threading.Lock()
         self._pruned = False
+        self._keep: set = set()   # sessions restored after an API restart; their proxies stay
 
         # On a Linux host, give proxies the host's upstream DNS (see upstream_nameservers).
         # On Docker Desktop there is no such file, and Docker's embedded DNS works there.
@@ -109,16 +110,31 @@ class EgressGateway:
         if self._pruned:
             return
         for container in self.client.containers.list(all=True, filters={"label": LABEL}):
+            if container.labels.get(LABEL) in self._keep:
+                continue
             try:
                 container.remove(force=True)
             except Exception:
                 pass
         for network in self.client.networks.list(filters={"label": LABEL}):
+            if (network.attrs.get("Labels") or {}).get(LABEL) in self._keep:
+                continue
             try:
                 network.remove()
             except Exception:
                 pass
         self._pruned = True
+
+    def reconnect(self, session_id: str, network_name: str, container_id: str, proxy_url: str) -> EgressSession:
+        """After an API restart: takes back a session's still-running proxy, so the session
+        keeps its internet access. Raises if the proxy or its network is gone."""
+        container = self.client.containers.get(container_id)
+        if container.status != "running" or container.labels.get(LABEL) != session_id:
+            raise RuntimeError(f"Egress proxy for {session_id} is not running")
+        self.client.networks.get(network_name)
+        with self._lock:
+            self._keep.add(session_id)
+        return EgressSession(network_name, container, proxy_url)
 
     def log_path(self, session_id: str) -> str:
         return os.path.join(self.log_dir, f"{session_id}.jsonl")

@@ -60,6 +60,7 @@ class ConsoleConfig:
     session_secret: str
     admins: Set[str] = field(default_factory=set)   # GitHub logins, lowercase
     signup: str = "invite"              # "invite" or "open"
+    contact: str = ""                   # operator contact shown on the privacy and terms pages
 
     @classmethod
     def from_env(cls) -> Optional["ConsoleConfig"]:
@@ -75,7 +76,8 @@ class ConsoleConfig:
         if signup not in ("invite", "open"):
             raise RuntimeError("SANDBOX_CONSOLE_SIGNUP must be 'invite' or 'open'.")
         admins = {a.strip().lower() for a in os.getenv("SANDBOX_CONSOLE_ADMINS", "").split(",") if a.strip()}
-        return cls(values[0].rstrip("/"), values[1], values[2], values[3], admins, signup)
+        return cls(values[0].rstrip("/"), values[1], values[2], values[3], admins, signup,
+                   os.getenv("SANDBOX_CONSOLE_CONTACT", "").strip())
 
 
 def build_console_router(
@@ -187,6 +189,16 @@ def build_console_router(
         keys = [k for k in keystore().list(tenant) if k.active]
         return render(request, "dashboard.html", tenant=tenant, active_keys=len(keys),
                       usage=accounts().usage(tenant), limits=limits(tenant), egress=egress(tenant))
+
+    # ------------------------------------------------------------------ policies (public)
+
+    @router.get("/privacy", response_class=HTMLResponse)
+    async def privacy(request: Request):
+        return render(request, "privacy.html", contact=config.contact, updated="8 October 2026")
+
+    @router.get("/terms", response_class=HTMLResponse)
+    async def terms(request: Request):
+        return render(request, "terms.html", contact=config.contact, updated="8 October 2026")
 
     @router.get("/login")
     async def login(request: Request):

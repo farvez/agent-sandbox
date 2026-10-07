@@ -1,3 +1,5 @@
+import os
+import shutil
 import threading
 import time
 
@@ -28,7 +30,23 @@ class FakeWorkspace:
         self.quota_bytes = self._ws.quota_bytes
         self.workspace_dir = self._ws.workspace_dir
         self.egress = egress or []
+        self.session_id, self.tenant_id = session_id, tenant_id
         self.cleaned = False
+
+    def state(self):
+        return {"session_id": self.session_id, "tenant_id": self.tenant_id, "workspace_dir": self.workspace_dir,
+                "quota_bytes": self.quota_bytes, "egress_rules": list(self.egress), "egress": None}
+
+    @classmethod
+    def restore(cls, state):
+        if not os.path.isdir(state["workspace_dir"]):
+            raise RuntimeError("workspace is gone")
+        ws = cls.__new__(cls)
+        ws._ws = make_offline_workspace()
+        ws._ws.workspace_dir = ws.workspace_dir = state["workspace_dir"]
+        ws.quota_bytes, ws.egress = state["quota_bytes"], state["egress_rules"]
+        ws.session_id, ws.tenant_id, ws.cleaned = state["session_id"], state["tenant_id"], False
+        return ws
 
     def write_file(self, path, content):
         return self._ws.write_file(path, content)
@@ -637,3 +655,50 @@ def test_closing_all_of_a_tenants_sessions(client):
     other = client.post("/v1/sessions", json={}, headers=OTHER_TENANT).json()["session_id"]
     assert server.close_tenant_sessions("acme") == 2
     assert other in server.active_sessions and a not in server.active_sessions and b not in server.active_sessions
+
+
+
+# ------------------------------------------------------------------ sessions survive an API restart
+
+def test_sessions_are_restored_after_a_restart(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SESSION_STATE_PATH", str(tmp_path / "sessions.json"))
+    kept = client.post("/v1/sessions", json={"egress": ["pypi"]}, headers=AUTH).json()["session_id"]
+    other = create(client)
+    client.post(f"/v1/sessions/{kept}/write", json={"path": "notes.txt", "content": "still here"}, headers=AUTH)
+    expired_rec = server.active_sessions[other]
+    expired_rec.last_accessed_at -= server.SESSION_TTL_SECONDS + 5
+    server.persist_sessions()
+
+    # The API process restarts: memory is gone, files and the saved registry are not.
+    server.active_sessions.clear()
+    monkeypatch.setattr(server, "LIMITS", LimitTracker(load_tenant_limits('{"*": {"max_sessions": 50}}')))
+    assert server.restore_sessions() == 1
+
+    rec = server.active_sessions[kept]
+    assert rec.tenant_id == "acme" and rec.egress == ["pypi.org", "files.pythonhosted.org"]
+    assert client.get(f"/v1/sessions/{kept}/read", params={"path": "notes.txt"}, headers=AUTH).json()["content"] == "still here"
+    assert other not in server.active_sessions                        # idle past the TTL: not restored
+    assert server.LIMITS.usage("acme")["sessions_open"] == 1          # counts toward the tenant's limit
+
+
+def test_unrestorable_sessions_are_skipped(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SESSION_STATE_PATH", str(tmp_path / "sessions.json"))
+    gone, fine = create(client), create(client)
+    server.persist_sessions()
+    shutil.rmtree(server.active_sessions[gone].workspace.workspace_dir)
+    server.active_sessions.clear()
+    assert server.restore_sessions() == 1 and fine in server.active_sessions and gone not in server.active_sessions
+
+
+def test_shutdown_keeps_workspaces_when_restarting(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SandboxedWorkspace", FakeWorkspace)
+    monkeypatch.setattr(server, "SESSION_STATE_PATH", str(tmp_path / "sessions.json"))
+    server.active_sessions.clear()
+    with TestClient(server.app) as c:
+        sid = c.post("/v1/sessions", json={}, headers=AUTH).json()["session_id"]
+        workspace = server.active_sessions[sid].workspace
+    assert workspace.cleaned is False                                  # left running for the next process
+    assert [s["session_id"] for s in server.session_state.load(str(tmp_path / "sessions.json"))] == [sid]
+    with TestClient(server.app):                                       # the next process takes it back
+        assert sid in server.active_sessions
+    server.active_sessions.clear()

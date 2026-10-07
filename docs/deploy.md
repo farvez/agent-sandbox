@@ -52,6 +52,25 @@ $(terraform output -raw fetch_api_keys_command)   # prints tenant:key pairs
 Provisioning takes about 8 minutes. Outputs include `api_endpoint`, `console_url` and
 `github_oauth_callback_url`.
 
+## Deploying changes
+
+```bash
+scripts/deploy.sh          # shows the plan, asks, deploys
+scripts/deploy.sh --yes    # no question
+```
+
+- **Code changes** (anything under `src/`, `requirements.txt`, `Dockerfile`) are deployed **in
+  place**: terraform uploads a new bundle and records it in the SSM parameter
+  `/agent-sandbox/app-bundle`, then the server's `update.sh` (run over SSM) installs it and
+  restarts only the API. Commands already running finish first (up to 90 s), Caddy holds new
+  requests for up to 30 s instead of failing them, and **open sessions are kept**: workspaces and
+  egress proxies keep running and the API takes them back from
+  `/var/lib/agent-sandbox/state/sessions.json`. If the new code fails its health check, the
+  server rolls back to the previous code. Takes about 30 seconds.
+- **Infrastructure changes** that alter the boot script or the instance replace the server
+  (about 8 minutes; open sessions end). The script pauses the `agent-sandbox-api-down` alarm's
+  emails until the new server is healthy, so a planned replacement doesn't page you.
+
 ## Operating it
 
 - **TLS:** with `domain_name` set, Caddy gets a Let's Encrypt certificate; without it Caddy
@@ -64,9 +83,9 @@ Provisioning takes about 8 minutes. Outputs include `api_endpoint`, `console_url
   Provisioning log: `/var/log/user_data.log`; service log: `journalctl -u agent-sandbox`.
 - **Stable address:** the API sits on an Elastic IP, so its URL stays the same across
   redeploys; `terraform destroy` releases it.
-- **Shipping code changes:** `terraform apply` re-zips `src/` (plus `Dockerfile` and
-  `requirements.txt`; never `.env`), so a code change replaces the instance. Sessions are in
-  memory and are lost; the URL, keys and console accounts stay.
+- **What's uploaded:** `terraform apply` zips `src/` plus `Dockerfile` and `requirements.txt`
+  (never `.env`). Apply it with `scripts/deploy.sh`, which also installs it on the server; a
+  plain `terraform apply` only uploads it.
 - **Adding a static tenant:** add its name to `tenants` and `terraform apply`, then restart the
   service (`systemctl restart agent-sandbox` via SSM). Removing a name revokes its key.
   Key rotation: `terraform apply -replace='random_password.tenant_key["acme"]'`, then restart.

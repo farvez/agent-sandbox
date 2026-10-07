@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy · Airlock console{% endblock %}
+{% block content %}
+<article class="policy">
+<h1>Privacy Policy</h1>
+<p class="muted">Last updated {{ updated }}.</p>
+
+<p>Airlock is a hosted service for running code from AI agents in isolated sandboxes, operated by
+  Farvez Anzam ("we"). This page explains what the hosted service at {{ base_url }} stores, why,
+  and for how long. The <a href="https://github.com/farvez/agent-sandbox">source code</a> is public,
+  so you can check every point below.</p>
+
+<h2>What we store</h2>
+<table class="policy-table">
+  <thead><tr><th>Data</th><th>Why</th><th>Kept for</th></tr></thead>
+  <tbody>
+    <tr><td>Your GitHub account ID, username, display name and avatar URL, when you sign in</td>
+        <td>To identify your account and show who you are in the console</td>
+        <td>Until your account is removed</td></tr>
+    <tr><td>Invite requests: what you'd use Airlock for, and the contact you choose to give</td>
+        <td>To review the request and tell you when you're in</td>
+        <td>Until the request is approved or dismissed</td></tr>
+    <tr><td>API keys: an ID and the name you chose. The key itself is stored only as a one-way hash.</td>
+        <td>To check requests are yours</td>
+        <td>Until you revoke the key; revoked keys are kept as records</td></tr>
+    <tr><td>Activity: each command you run, as typed, with time, session, which key or console user ran it, exit code and duration. <strong>Never the command's output.</strong></td>
+        <td>So you (and we, for abuse and security) can see what ran</td>
+        <td>90 days</td></tr>
+    <tr><td>Internet connection log: each outbound connection your sandboxes attempt (host, allowed or refused, bytes)</td>
+        <td>To enforce and show what your sandboxes reached</td>
+        <td>30 days</td></tr>
+    <tr><td>Monthly usage totals: sessions, commands and sandbox time</td>
+        <td>To show your usage and set fair limits</td>
+        <td>Until you ask us to delete them</td></tr>
+    <tr><td>Files in your workspaces</td>
+        <td>So your code persists between commands</td>
+        <td>Deleted when the session closes (when you close it, or after 30 minutes without use)</td></tr>
+    <tr><td>Server request logs, including IP addresses</td>
+        <td>To operate the service and investigate abuse</td>
+        <td>14 days</td></tr>
+  </tbody>
+</table>
+
+<p>We don't store your GitHub access token: sign-in asks GitHub only for your public profile
+  (<code>read:user</code>), and the token is discarded right after. Commands are stored as typed, so
+  don't put passwords or keys in command lines; write them to a file instead.</p>
+
+<h2>Cookies</h2>
+<p>Only cookies the console needs to work: your sign-in (7 days), a sign-in check while you're
+  on GitHub (10 minutes), one-time notices (2 minutes), and your verified GitHub identity while you
+  request an invite (30 minutes). No analytics, advertising or tracking cookies.</p>
+
+<h2>Who else handles it</h2>
+<ul>
+  <li><strong>Amazon Web Services</strong> hosts the service and its databases in the United States (us-east-1).</li>
+  <li><strong>GitHub</strong> handles sign-in.</li>
+  <li>When you request an invite, its details are emailed to the operator through Amazon SNS.</li>
+</ul>
+<p>We don't sell your data, show ads, or use third-party analytics. We disclose data only if the law requires it.</p>
+
+<h2>Your choices</h2>
+<p>You can revoke API keys and close workspaces yourself at any time. To see, correct or delete
+  the data we hold about you, or to delete your account, contact us below. Deleting an account
+  revokes its keys and closes its sandboxes; activity entries expire on their own within 90 days,
+  or sooner on request.</p>
+
+<h2>Changes and contact</h2>
+<p>If this policy changes, the date at the top changes too; significant changes will be announced
+  in the console. Questions or requests:
+  {% if contact %}<strong>{{ contact }}</strong>{% else %}open an issue at
+  <a href="https://github.com/farvez/agent-sandbox/issues">github.com/farvez/agent-sandbox/issues</a>{% endif %}.
+  Security problems: see <a href="https://github.com/farvez/agent-sandbox/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</article>
+{% endblock %}

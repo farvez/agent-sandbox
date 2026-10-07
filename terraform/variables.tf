@@ -86,6 +86,12 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "console_contact" {
+  description = "Contact shown on the console's privacy and terms pages (an email address). Empty = point people to GitHub issues."
+  type        = string
+  default     = ""
+}
+
 variable "audit_retention_days" {
   description = "Days the per-tenant command audit log keeps entries (DynamoDB TTL deletes older ones)."
   type        = number

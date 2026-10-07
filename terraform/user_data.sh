@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 # address; retry downloads instead of failing provisioning on that blip.
 echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
 AWS_REGION="${aws_region}"
-APP_BUNDLE="${app_bundle_s3}"
+BUNDLE_PARAM="${bundle_param}"
 API_KEY_PARAM="${api_key_param}"
 ADMIN_KEY_PARAM="${admin_key_param}"
 KEYS_TABLE="${keys_table}"
@@ -23,6 +23,7 @@ GITHUB_SECRET_PARAM="${github_secret_param}"
 CONSOLE_SECRET_PARAM="${console_secret_param}"
 CONSOLE_ADMINS="${console_admins}"
 CONSOLE_SIGNUP="${console_signup}"
+CONSOLE_CONTACT="${console_contact}"
 DOMAIN="${domain_name}"
 TLS_STATE_S3="${tls_state_s3}"
 ACME_EMAIL="${acme_email}"
@@ -39,6 +40,14 @@ WS_SLOTS="${workspace_slots}"
 WS_QUOTA_MB="${workspace_quota_mb}"
 APP_DIR=/opt/agent-sandbox
 ARCH=$(uname -m)
+
+# 0. Keep the system log (which includes the API's request log with client IPs) for 14 days,
+#    as the console's privacy policy states.
+mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]
+MaxRetentionSec=14day
+' > /etc/systemd/journald.conf.d/retention.conf
+systemctl restart systemd-journald
 
 # 1. OS packages
 apt-get update -y
@@ -81,24 +90,33 @@ PY
 systemctl restart docker
 docker info --format '{{json .Runtimes}}' | grep -q runsc   # fail provisioning if not registered
 
-# 5. Application code from the private S3 bundle
+# 5. Application code from the private S3 bundle (its location is an SSM parameter,
+#    so later code changes are deployed in place by update.sh, not by a new instance)
 mkdir -p "$APP_DIR"
+APP_BUNDLE=$(aws ssm get-parameter --region "$AWS_REGION" --name "$BUNDLE_PARAM" --query Parameter.Value --output text)
 aws s3 cp --region "$AWS_REGION" "$APP_BUNDLE" /tmp/app.zip
 unzip -o -q /tmp/app.zip -d "$APP_DIR"
+echo "$APP_BUNDLE" > "$APP_DIR/.bundle"
+
+# The service user exists before the image is built, so the image's "sandbox" user can
+# share its uid/gid (workspace files then show as owned by "sandbox", not a number).
+id -u sandbox >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin sandbox
 
 # Sandbox images: build the repo's Dockerfile and pre-pull the other allowlisted
 # template (containers.create does not pull missing images).
-docker build -t sandbox-base:latest "$APP_DIR"
+docker build --build-arg SANDBOX_UID="$(id -u sandbox)" --build-arg SANDBOX_GID="$(id -g sandbox)" \
+  -t sandbox-base:latest "$APP_DIR"
 docker pull python:3.11-slim
 
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 
-# 6. Dedicated service user (in the docker group, not root)
-id -u sandbox >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin sandbox
+# 6. Dedicated service user (created above; in the docker group, not root)
 usermod -aG docker sandbox
 install -d -o sandbox -g sandbox -m 0700 "$EGRESS_LOG_DIR"
+# Open sessions are saved here so they survive API restarts (deploys); holds proxy passes.
+install -d -o sandbox -g sandbox -m 0700 /var/lib/agent-sandbox/state
 
 # 6b. Disk-limited workspaces. A dedicated ext4 filesystem (a loop-mounted image,
 #     size-capped so workspaces can never fill the main disk) with project quotas,
@@ -158,6 +176,7 @@ export SANDBOX_GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID"
 export SANDBOX_CONSOLE_BASE_URL="$CONSOLE_BASE_URL"
 export SANDBOX_CONSOLE_ADMINS="$CONSOLE_ADMINS"
 export SANDBOX_CONSOLE_SIGNUP="$CONSOLE_SIGNUP"
+export SANDBOX_CONSOLE_CONTACT="$CONSOLE_CONTACT"
 EOF
 fi
 echo "exec $APP_DIR/.venv/bin/python3 -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --proxy-headers" >> "$APP_DIR/start.sh"
@@ -189,9 +208,12 @@ Environment=SANDBOX_AUDIT_RETENTION_DAYS=$AUDIT_RETENTION_DAYS
 Environment=SANDBOX_NOTIFY_TOPIC_ARN=$NOTIFY_TOPIC_ARN
 Environment=AWS_REGION=$AWS_REGION
 Environment=SANDBOX_EGRESS_LOG_DIR=$EGRESS_LOG_DIR
+Environment=SANDBOX_SESSION_STATE=/var/lib/agent-sandbox/state/sessions.json
 ExecStart=$APP_DIR/start.sh
 Restart=always
 RestartSec=5
+# A restart (deploy) lets running commands finish (they're capped at 60 s) before stopping.
+TimeoutStopSec=90
 NoNewPrivileges=yes
 
 [Install]
@@ -200,6 +222,56 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now agent-sandbox
+
+# 6c. In-place code updates: scripts/deploy.sh runs this over SSM after terraform has
+#     uploaded a new bundle. Only the API process restarts; open sessions are kept.
+cat > /etc/agent-sandbox/update.env <<EOF
+AWS_REGION=$AWS_REGION
+APP_DIR=$APP_DIR
+BUNDLE_PARAM=$BUNDLE_PARAM
+EOF
+cat > "$APP_DIR/update.sh" <<'UPDATE'
+#!/bin/bash
+set -euo pipefail
+. /etc/agent-sandbox/update.env
+BUNDLE=$(aws ssm get-parameter --region "$AWS_REGION" --name "$BUNDLE_PARAM" --query Parameter.Value --output text)
+if [ "$BUNDLE" = "$(cat "$APP_DIR/.bundle" 2>/dev/null || true)" ]; then
+  echo "Already running $BUNDLE"
+  exit 0
+fi
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+aws s3 cp --region "$AWS_REGION" --only-show-errors "$BUNDLE" "$WORK/app.zip"
+unzip -q "$WORK/app.zip" -d "$WORK/new"
+if ! cmp -s "$WORK/new/requirements.txt" "$APP_DIR/requirements.txt"; then
+  echo "Installing changed requirements"
+  "$APP_DIR/.venv/bin/pip" install -q -r "$WORK/new/requirements.txt"
+fi
+if ! cmp -s "$WORK/new/Dockerfile" "$APP_DIR/Dockerfile"; then
+  echo "Rebuilding the sandbox image"
+  docker build -q --build-arg SANDBOX_UID="$(id -u sandbox)" --build-arg SANDBOX_GID="$(id -g sandbox)" \
+    -t sandbox-base:latest "$WORK/new" >/dev/null
+fi
+rm -rf "$APP_DIR/src.previous"
+mv "$APP_DIR/src" "$APP_DIR/src.previous"
+cp -r "$WORK/new/src" "$APP_DIR/src"
+cp "$WORK/new/requirements.txt" "$WORK/new/Dockerfile" "$APP_DIR/"
+systemctl restart agent-sandbox
+for _ in $(seq 1 90); do
+  if curl -fsS --max-time 2 http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+    echo "$BUNDLE" > "$APP_DIR/.bundle"
+    echo "Updated to $BUNDLE"
+    exit 0
+  fi
+  sleep 1
+done
+echo "The new code failed its health check; rolling back" >&2
+rm -rf "$APP_DIR/src"
+mv "$APP_DIR/src.previous" "$APP_DIR/src"
+systemctl restart agent-sandbox
+exit 1
+UPDATE
+chmod 0700 "$APP_DIR/update.sh"
 
 # 7. Caddy reverse proxy for TLS
 curl -1sLf --retry 5 --retry-all-errors https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
@@ -223,7 +295,10 @@ EOF
   fi
   cat >> /etc/caddy/Caddyfile <<EOF
 $DOMAIN {
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+	}
 }
 EOF
 else
@@ -235,7 +310,10 @@ else
 }
 https://$PUBLIC_IP {
 	tls internal
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+	}
 }
 EOF
 fi

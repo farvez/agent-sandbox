@@ -58,6 +58,14 @@ commands count toward usage like API calls.
 - **Default egress:** an `"*"` entry in `egress_policy` applies to every tenant not listed, so
   console sign-ups can `pip install` (`"*" = ["pypi"]`).
 
+## Privacy and terms
+
+`/console/privacy` and `/console/terms` are public pages, linked from every page footer and the
+sign-in page. The privacy page lists exactly what the service stores and for how long (activity
+90 days, egress log 30 days, server logs 14 days, workspace files until the session closes), so
+update it if those change. Set `console_contact` (an email address) in `terraform.tfvars` to show
+a contact; without one the pages point to GitHub issues.
+
 ## Setup
 
 Create a GitHub OAuth app (Settings → Developer settings → OAuth Apps → New) with

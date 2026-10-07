@@ -174,3 +174,12 @@ td.result .pill { margin-right: 6px; }
 .pager { display: flex; gap: 10px; margin-top: 14px; }
 td.cmd { min-width: 220px; }
 @media (max-width: 960px) { .hide-md { display: none; } }
+
+/* Privacy and terms */
+.policy { max-width: 760px; }
+.policy h2 { margin-top: 1.6em; }
+.policy li { margin-bottom: .4em; max-width: 72ch; }
+.policy-table { margin: 12px 0 18px; }
+.policy-table td { vertical-align: top; font-size: .92rem; }
+.policy-table td:last-child { white-space: nowrap; }
+@media (max-width: 560px) { .policy-table td:last-child { white-space: normal; } }

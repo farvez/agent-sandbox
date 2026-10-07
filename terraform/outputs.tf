@@ -29,3 +29,8 @@ output "fetch_admin_key_command" {
   description = "Prints the admin key for `airlock-sandbox-keys --admin` (needs ssm:GetParameter on it)"
   value       = "aws ssm get-parameter --region ${var.aws_region} --name ${aws_ssm_parameter.admin_key.name} --with-decryption --query Parameter.Value --output text"
 }
+
+output "aws_region" {
+  description = "Region the server runs in (used by scripts/deploy.sh)"
+  value       = var.aws_region
+}

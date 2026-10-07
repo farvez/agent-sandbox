@@ -80,13 +80,16 @@ class WorkspacePool:
     def _slots(self):
         return sorted(name for name in os.listdir(self.root) if name.startswith("slot-"))
 
-    def _reset_once(self) -> None:
+    def _reset_once(self, keep: frozenset = frozenset()) -> None:
         """First claim in this process: claims held by an earlier API process
-        belong to sessions that died with it, so free and wipe them."""
+        belong to sessions that died with it, so free and wipe them — except the
+        slots in `keep`, whose sessions were restored after a restart."""
         if self._reset_done:
             return
         os.makedirs(self.lock_dir, exist_ok=True)
         for name in os.listdir(self.lock_dir):
+            if name in keep:
+                continue
             slot = os.path.join(self.root, name)
             if os.path.isdir(slot):
                 wipe_directory(slot)
@@ -94,7 +97,19 @@ class WorkspacePool:
                 os.rmdir(os.path.join(self.lock_dir, name))
             except OSError:
                 pass
+        for name in keep:   # make sure every kept slot stays claimed
+            try:
+                os.mkdir(os.path.join(self.lock_dir, name))
+            except FileExistsError:
+                pass
         self._reset_done = True
+
+    def recover(self, keep_paths) -> None:
+        """At startup, before any claim: keep these slots (restored sessions), free the rest."""
+        keep = frozenset(os.path.basename(os.path.realpath(p)) for p in keep_paths
+                         if os.path.dirname(os.path.realpath(p)) == self.root)
+        with self._lock:
+            self._reset_once(keep)
 
     def claim(self) -> str:
         with self._lock:

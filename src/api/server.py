@@ -19,11 +19,12 @@ from src.api.accounts import AccountStore
 from src.api.audit import AuditLog
 from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKey
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
+from src.api import session_state
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.api.repos import RepoImportError, clean_destination, fetch_archive, import_archive, parse_repo
 from src.sandbox.workspace import SandboxedWorkspace, format_result
-from src.sandbox.workspace_pool import QuotaExceededError, WorkspaceCapacityError
+from src.sandbox.workspace_pool import QuotaExceededError, WorkspaceCapacityError, get_pool
 
 
 
@@ -233,6 +234,58 @@ def reap_expired_sessions() -> None:
     for rec in expired:
         rec.workspace.cleanup()
         LIMITS.close_session(rec.tenant_id)
+    persist_sessions()
+
+
+# ------------------------------------------------------------------ sessions survive API restarts
+# With SANDBOX_SESSION_STATE set, a restart (e.g. a code deploy) keeps every open session:
+# workspaces and egress proxies keep running on the host, the registry is saved on the way
+# down (and every minute) and taken back on the way up.
+
+SESSION_STATE_PATH = os.getenv("SANDBOX_SESSION_STATE") or None
+
+
+def persist_sessions() -> None:
+    if not SESSION_STATE_PATH:
+        return
+    with sessions_lock:
+        records = list(active_sessions.values())
+    try:
+        session_state.save(SESSION_STATE_PATH, [{
+            **rec.workspace.state(), "session_egress": rec.egress,
+            "created_at": rec.created_at, "last_accessed_at": rec.last_accessed_at,
+        } for rec in records])
+    except Exception:
+        logger.exception("Saving the session registry failed")
+
+
+def restore_sessions() -> int:
+    """At startup: takes back the sessions the previous API process left running.
+    Anything that can't be restored (expired, workspace or proxy gone) is cleaned up."""
+    now = time.time()
+    restored: List[SessionRecord] = []
+    for saved in session_state.load(SESSION_STATE_PATH):
+        try:
+            if now - float(saved["last_accessed_at"]) > SESSION_TTL_SECONDS:
+                continue
+            workspace = SandboxedWorkspace.restore(saved)
+        except Exception as e:
+            logger.warning("Could not restore session %s: %s", saved.get("session_id"), e)
+            continue
+        rec = SessionRecord(saved["session_id"], workspace, saved["tenant_id"], egress=saved.get("session_egress"))
+        rec.created_at = float(saved["created_at"])
+        rec.last_accessed_at = float(saved["last_accessed_at"])
+        restored.append(rec)
+    pool = get_pool()
+    if pool is not None:
+        pool.recover([rec.workspace.workspace_dir for rec in restored])   # frees every other slot
+    with sessions_lock:
+        for rec in restored:
+            active_sessions[rec.session_id] = rec
+    for rec in restored:
+        LIMITS.restore_session(rec.tenant_id)
+    persist_sessions()
+    return len(restored)
 
 
 async def session_ttl_sweeper():
@@ -247,9 +300,19 @@ async def session_ttl_sweeper():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if SESSION_STATE_PATH:
+        restored = await asyncio.to_thread(restore_sessions)
+        logger.info("Restored %d session(s) after restart", restored)
     sweeper_task = asyncio.create_task(session_ttl_sweeper())
     yield
     sweeper_task.cancel()
+    if SESSION_STATE_PATH:
+        # A restart, not the end: leave workspaces and proxies running for the next process.
+        await asyncio.to_thread(persist_sessions)
+        with sessions_lock:
+            active_sessions.clear()
+        shutdown_gateway()
+        return
     with sessions_lock:
         remaining = list(active_sessions.values())
         active_sessions.clear()
@@ -349,6 +412,7 @@ def start_session(tenant_id: str, template: str = "sandbox-base:latest",
     with sessions_lock:
         active_sessions[session_id] = rec
     record_usage(tenant_id, sessions=1)
+    persist_sessions()
     return rec
 
 
@@ -401,6 +465,7 @@ def end_session(session_id: str, tenant_id: str) -> None:
 
     rec.workspace.cleanup()
     LIMITS.close_session(tenant_id)
+    persist_sessions()
 
 
 def close_tenant_sessions(tenant_id: str) -> int:

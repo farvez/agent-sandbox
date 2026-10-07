@@ -156,6 +156,14 @@ resource "aws_s3_object" "app" {
   etag   = data.archive_file.app.output_md5
 }
 
+# Which bundle the host should run. The host reads it at first boot and whenever
+# scripts/deploy.sh runs its updater, so code changes don't replace the instance.
+resource "aws_ssm_parameter" "app_bundle" {
+  name  = "/agent-sandbox/app-bundle"
+  type  = "String"
+  value = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
+}
+
 # 4. One generated API key per tenant, stored together as an SSM SecureString in the
 #    SANDBOX_API_KEYS format ("tenant:key,tenant:key") and fetched by the host each
 #    time the service starts. Keys are also in Terraform state; keep state private.
@@ -245,7 +253,7 @@ resource "aws_iam_role_policy" "sandbox_host" {
       {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = [aws_ssm_parameter.api_keys.arn, aws_ssm_parameter.admin_key.arn]
+        Resource = [aws_ssm_parameter.api_keys.arn, aws_ssm_parameter.admin_key.arn, aws_ssm_parameter.app_bundle.arn]
       },
       {
         Effect   = "Allow"
@@ -316,7 +324,7 @@ resource "aws_instance" "sandbox_host" {
 
   user_data = templatefile("${path.module}/user_data.sh", {
     aws_region           = var.aws_region
-    app_bundle_s3        = "s3://${aws_s3_bucket.artifacts.id}/${aws_s3_object.app.key}"
+    bundle_param         = aws_ssm_parameter.app_bundle.name
     api_key_param        = aws_ssm_parameter.api_keys.name
     domain_name          = var.domain_name
     session_ttl_secs     = var.session_ttl_seconds
@@ -335,6 +343,7 @@ resource "aws_instance" "sandbox_host" {
     console_secret_param = aws_ssm_parameter.console_secret.name
     console_admins       = join(",", var.console_admins)
     console_signup       = var.console_signup
+    console_contact      = var.console_contact
     tls_state_s3         = "s3://${aws_s3_bucket.artifacts.id}/tls/caddy"
     acme_email           = var.acme_email
     audit_table          = aws_dynamodb_table.audit.name
@@ -342,7 +351,8 @@ resource "aws_instance" "sandbox_host" {
     notify_topic_arn     = aws_sns_topic.alerts.arn
   })
 
-  # A new code bundle produces new user_data, which replaces the host.
+  # Only changes to the boot script itself replace the host; code changes are deployed in
+  # place by scripts/deploy.sh (the bundle location lives in SSM, not in user_data).
   user_data_replace_on_change = true
 
   tags = {

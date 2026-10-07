@@ -423,3 +423,30 @@ def test_activity_is_hidden_without_an_audit_log(tmp_path):
     sign_in(client, "code-admin")
     assert 'href="/console/activity"' not in client.get("/console").text
     assert client.get("/console/activity").status_code == 404
+
+
+# ------------------------------------------------------------------ privacy and terms
+
+def test_policy_pages_are_public_and_linked(console):
+    client, *_ = console
+    for path, heading in (("/console/privacy", "Privacy Policy"), ("/console/terms", "Terms of Use")):
+        page = client.get(path)
+        assert page.status_code == 200 and heading in page.text
+        assert "github.com/farvez/agent-sandbox/issues" in page.text          # no contact configured
+    landing = client.get("/console").text
+    assert 'href="/console/privacy"' in landing and 'href="/console/terms"' in landing
+
+
+def test_privacy_page_states_retention_and_shows_the_contact(tmp_path):
+    config = ConsoleConfig("https://console.test", "client-id", "client-secret", "s" * 40, {"farvez"}, "invite",
+                           "privacy@example.com")
+    app = FastAPI()
+    app.include_router(build_console_router(
+        config, keystore=lambda: None, accounts=lambda: AccountStore(_SqliteItems(str(tmp_path / "a.db"))),
+        limits=lambda t: {}, egress=lambda t: [],
+        github=GitHubOAuth("client-id", "client-secret", "https://console.test/console/auth/callback", http=fake_github),
+    ))
+    page = html.unescape(TestClient(app, base_url="https://console.test").get("/console/privacy").text)
+    assert "privacy@example.com" in page
+    for promise in ("90 days", "30 days", "14 days", "Never the command's output", "read:user"):
+        assert promise in page

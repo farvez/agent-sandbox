@@ -71,6 +71,47 @@ class SandboxedWorkspace:
                 self.cleanup()
                 raise
 
+    # ------------------------------------------------------------- surviving an API restart
+
+    def state(self) -> dict:
+        """What's needed to take this workspace back after the API process restarts.
+        (Contains the proxy pass, so the file it's saved in must stay private.)"""
+        return {
+            "base_image": self.base_image, "session_id": self.session_id, "tenant_id": self.tenant_id,
+            "workspace_dir": self.workspace_dir, "quota_bytes": self.quota_bytes,
+            "egress_rules": list(self.egress_rules),
+            "egress": None if self.egress is None else {
+                "network_name": self.egress.network_name, "container_id": self.egress.container.id,
+                "proxy_url": self.egress.proxy_url,
+            },
+        }
+
+    @classmethod
+    def restore(cls, state: dict) -> "SandboxedWorkspace":
+        """Rebuilds a workspace from state(): same directory (still claimed in the pool) and,
+        for internet-enabled sessions, the same still-running proxy. Raises if anything is gone."""
+        ws = cls.__new__(cls)
+        ws.base_image = state["base_image"]
+        ws.session_id = state["session_id"]
+        ws.tenant_id = state["tenant_id"]
+        ws.client = docker.from_env()
+        ws.gvisor_runner = GVisorSandboxRunner(image=ws.base_image)
+        ws.has_gvisor = ws.gvisor_runner.is_gvisor_available()
+        ws.quota_bytes = int(state["quota_bytes"])
+        ws.pool = get_pool()
+        ws.workspace_dir = os.path.realpath(state["workspace_dir"])
+        if not os.path.isdir(ws.workspace_dir):
+            raise RuntimeError(f"Workspace {ws.workspace_dir} is gone")
+        ws.container_user = ws._container_user()
+        ws.egress_rules = list(state.get("egress_rules") or [])
+        ws.gateway = None
+        ws.egress = None
+        saved = state.get("egress")
+        if saved:
+            ws.gateway = get_gateway(ws.client, runtime="runsc" if ws.has_gvisor else None, user=ws.container_user)
+            ws.egress = ws.gateway.reconnect(ws.session_id, saved["network_name"], saved["container_id"], saved["proxy_url"])
+        return ws
+
     def _connect_egress(self, gateway: Optional[EgressGateway]) -> None:
         self.gateway = gateway or get_gateway(
             self.client,

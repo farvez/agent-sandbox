@@ -109,3 +109,25 @@ def test_overwriting_a_file_counts_only_the_difference(offline_workspace):
     offline_workspace.quota_bytes = 2**20
     offline_workspace.write_file("a.txt", "x" * 700_000)
     offline_workspace.write_file("a.txt", "y" * 700_000)   # replaces, doesn't add
+
+
+def test_recover_keeps_restored_slots_and_frees_the_rest(pool_root):
+    old = WorkspacePool(str(pool_root))
+    kept, dropped = old.claim(), old.claim()
+    for slot, name in ((kept, "keep.txt"), (dropped, "drop.txt")):
+        with open(os.path.join(slot, name), "w") as f:
+            f.write("data")
+
+    fresh = WorkspacePool(str(pool_root))   # the API restarted
+    fresh.recover([kept])
+    assert os.listdir(kept) == ["keep.txt"]          # the restored session keeps its files
+    assert os.listdir(dropped) == []                 # the session that wasn't restored is wiped
+    claimed = {fresh.claim(), fresh.claim()}
+    assert kept not in claimed                       # still held by the restored session
+    assert dropped in claimed
+
+
+def test_recover_ignores_paths_outside_the_pool(pool_root, tmp_path):
+    fresh = WorkspacePool(str(pool_root))
+    fresh.recover([str(tmp_path / "elsewhere")])
+    assert len({fresh.claim() for _ in range(3)}) == 3

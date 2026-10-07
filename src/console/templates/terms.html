@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Terms of Use · Airlock console{% endblock %}
+{% block content %}
+<article class="policy">
+<h1>Terms of Use</h1>
+<p class="muted">Last updated {{ updated }}.</p>
+
+<p>These terms cover the hosted Airlock service at {{ base_url }}, operated by Farvez Anzam ("we").
+  By signing in or using an API key, you agree to them. The Airlock source code is licensed
+  separately: the server under the GNU AGPL-3.0 and the Python SDK under the MIT License.</p>
+
+<h2>The preview</h2>
+<p>Airlock is a free, invite-only preview. Features, limits and availability may change, and the
+  preview may end. There's no uptime guarantee. Workspaces are temporary: they're deleted when a
+  session closes, so keep anything important somewhere else.</p>
+
+<h2>Your code and data</h2>
+<p>What you run and store in Airlock stays yours; we don't claim any rights to it. You're
+  responsible for what you run and for having the right to run it. See the
+  <a href="/console/privacy">Privacy Policy</a> for what we store and for how long.</p>
+
+<h2>Acceptable use</h2>
+<p>Don't use Airlock to:</p>
+<ul>
+  <li>break the law, or store or distribute malware or content you have no right to share;</li>
+  <li>attack, scan or overload other systems, or mine cryptocurrency;</li>
+  <li>try to get around the sandbox, its limits or other users' isolation. Security research is
+    welcome on <a href="https://github.com/farvez/agent-sandbox/blob/main/docs/deploy.md">your own
+    deployment</a>; report findings privately as described in
+    <a href="https://github.com/farvez/agent-sandbox/blob/main/SECURITY.md">SECURITY.md</a>;</li>
+  <li>share your account or API keys, or resell access.</li>
+</ul>
+
+<h2>API keys</h2>
+<p>Keep your keys secret; activity using them counts as yours. Revoke a key in the console as
+  soon as you think it has leaked.</p>
+
+<h2>Suspension</h2>
+<p>We may limit, suspend or remove access, close sessions, or revoke keys if these terms are
+  broken or to protect the service and other users.</p>
+
+<h2>No warranty</h2>
+<p>The service is provided "as is", without warranties of any kind. To the extent the law allows,
+  we aren't liable for indirect or consequential losses, or for lost data, arising from your use of
+  the service.</p>
+
+<h2>Changes and contact</h2>
+<p>We may update these terms; the date at the top shows the latest version, and continuing to use
+  the service means you accept the changes. Questions:
+  {% if contact %}<strong>{{ contact }}</strong>{% else %}open an issue at
+  <a href="https://github.com/farvez/agent-sandbox/issues">github.com/farvez/agent-sandbox/issues</a>{% endif %}.</p>
+</article>
+{% endblock %}

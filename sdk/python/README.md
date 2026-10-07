@@ -112,6 +112,19 @@ Add `-e SANDBOX_API_INSECURE=1` if the server uses a self-signed certificate. Wi
 Put the server name (`airlock`) right after `add`: `-e` takes several values and would
 otherwise swallow the name. If `uvx` reports an old version, run it once with `--refresh`.
 
+**If Claude Code says the server timed out:** it waits 30 seconds for a server to start. On
+Windows, importing the `mcp` library alone can take 8–10 seconds (antivirus scanning its many
+files), and `uvx` adds an install on the first start after each release. Two fixes, either works:
+
+- Install the tool once, so starting it never installs anything, and point Claude Code at it:
+
+  ```bash
+  uv tool install "airlock-sandbox[mcp]"     # later: uv tool upgrade airlock-sandbox
+  claude mcp add airlock --scope user -e SANDBOX_API_URL=https://<server> -e SANDBOX_API_KEY=<key> -e AIRLOCK_EGRESS=pypi -- airlock-sandbox-mcp
+  ```
+- Give servers longer to start, by setting `MCP_TIMEOUT` (milliseconds) before starting Claude Code,
+  e.g. `MCP_TIMEOUT=60000 claude` (PowerShell: `$env:MCP_TIMEOUT=60000; claude`).
+
 **Claude Desktop** (`claude_desktop_config.json`):
 
 ```json

@@ -195,6 +195,51 @@ def test_first_start_prunes_orphaned_networks_but_never_live_ones():
         shutdown_gateway()
 
 
+
+def test_egress_session_survives_an_api_restart():
+    """A code deploy restarts the API process: the session's workspace and proxy keep running
+    and are taken back; a new session afterwards must not prune the restored proxy."""
+    import docker
+    from src.egress.gateway import shutdown_gateway
+
+    client = docker.from_env()
+    shutdown_gateway()
+    a = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_restart")
+    restored = b = None
+    try:
+        a.write_file("kept.txt", "survives")
+        state = a.state()
+        shutdown_gateway()                                          # the old API process is gone
+
+        restored = SandboxedWorkspace.restore(state)
+        assert restored.egress.container.id == a.egress.container.id
+        assert restored.workspace_dir == a.workspace_dir
+        b = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_after_restart")   # prunes orphans
+        assert client.containers.get(restored.egress.container.id).status == "running"
+        assert restored.read_file("kept.txt") == "survives"
+        assert "[EXIT CODE]: 0" in restored.run_command("true")
+    finally:
+        (restored or a).cleanup()
+        if b:
+            b.cleanup()
+        shutdown_gateway()
+
+
+def test_restore_refuses_a_session_whose_proxy_is_gone():
+    from src.egress.gateway import shutdown_gateway
+
+    shutdown_gateway()
+    a = SandboxedWorkspace(egress=["pypi"], session_id="sbx_pytest_proxy_gone")
+    state = a.state()
+    a.egress.container.remove(force=True)
+    try:
+        with pytest.raises(Exception):
+            SandboxedWorkspace.restore(state)
+    finally:
+        a.cleanup()
+        shutdown_gateway()
+
+
 # ---------------------------------------------------------------- disk quota (soft layer)
 
 
