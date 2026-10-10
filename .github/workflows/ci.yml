@@ -130,3 +130,7 @@ jobs:
           sed -n '2,/^EOT/p' rendered.txt | sed '$d' > user_data.rendered.sh
           bash -n user_data.rendered.sh
           grep -q 'WS_SLOTS="100"' user_data.rendered.sh
+          # EC2 caps user data at 16 KB; it's sent gzip-compressed, so that's the size that counts.
+          size=$(gzip -9c user_data.rendered.sh | wc -c)
+          echo "Boot script: $(wc -c < user_data.rendered.sh) bytes, $size gzipped (EC2 limit 16384)"
+          [ "$size" -lt 14000 ] || { echo "Boot script too close to EC2's 16 KB user-data limit"; exit 1; }

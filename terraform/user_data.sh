@@ -290,13 +290,16 @@ exit 1
 UPDATE
 chmod 0700 "$APP_DIR/update.sh"
 
-# 7. Caddy reverse proxy for TLS
-curl -1sLf --retry 5 --retry-all-errors https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
-  | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf --retry 5 --retry-all-errors https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
-  > /etc/apt/sources.list.d/caddy-stable.list
-apt-get update -y
-apt-get install -y caddy
+# 7. Caddy reverse proxy for TLS: the official release package from GitHub, pinned and checked
+#    against the release's published SHA-512 checksums (its apt repository on Cloudsmith started
+#    refusing downloads with "402 Payment Required").
+CADDY_VERSION=2.11.7
+CADDY_DEB="caddy_$CADDY_VERSION""_linux_$(dpkg --print-architecture).deb"
+CADDY_URL="https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION"
+curl -fsSL --retry 5 --retry-all-errors "$CADDY_URL/$CADDY_DEB" -o "/tmp/$CADDY_DEB"
+curl -fsSL --retry 5 --retry-all-errors "$CADDY_URL/caddy_$CADDY_VERSION""_checksums.txt" -o /tmp/caddy_checksums.txt
+(cd /tmp && grep " $CADDY_DEB\$" caddy_checksums.txt | sha512sum -c -)   # stops provisioning on a mismatch
+apt-get install -y "/tmp/$CADDY_DEB"
 
 if [ -n "$DOMAIN" ]; then
   # Public certificate from Let's Encrypt (needs DNS pointing here and port 80 open).

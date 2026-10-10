@@ -322,7 +322,9 @@ resource "aws_instance" "sandbox_host" {
     delete_on_termination = true
   }
 
-  user_data = templatefile("${path.module}/user_data.sh", {
+  # Gzip-compressed (cloud-init unpacks it): EC2 caps user data at 16 KB, and the boot
+  # script is larger than that as plain text but well under it compressed.
+  user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh", {
     aws_region           = var.aws_region
     bundle_param         = aws_ssm_parameter.app_bundle.name
     api_key_param        = aws_ssm_parameter.api_keys.name
@@ -354,7 +356,7 @@ resource "aws_instance" "sandbox_host" {
     audit_table          = aws_dynamodb_table.audit.name
     audit_retention_days = var.audit_retention_days
     notify_topic_arn     = aws_sns_topic.alerts.arn
-  })
+  }))
 
   # Only changes to the boot script itself replace the host; code changes are deployed in
   # place by scripts/deploy.sh (the bundle location lives in SSM, not in user_data).
