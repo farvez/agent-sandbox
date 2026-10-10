@@ -22,8 +22,16 @@ commands count toward usage like API calls.
   sandbox planted is followed). It is unpacked **inside the sandbox** by the unprivileged
   sandbox user, so hostile archives (`../` paths, symlinks, huge files) stay contained and the
   disk quota applies; an archive tar refuses leaves nothing behind. The session needs no
-  egress for this. Public repositories only for now. Also available as
-  `POST /v1/sessions/{id}/import`, `sbx.import_repo()` and the MCP `import_repo` tool.
+  egress for this. Also available as `POST /v1/sessions/{id}/import`, `sbx.import_repo()` /
+  `sbx.importRepo()` and the MCP `import_repo` tool.
+- **Private repositories:** with the GitHub App configured, **Workspaces → Connect GitHub**
+  installs the app on the user's account or organisation for the repositories they pick
+  (Contents: read-only). On the way back, the one-time code is exchanged for a user token only
+  to check that the GitHub user who installed it is the signed-in console user; the token is
+  then dropped and the installation IDs are stored for the tenant. Importing tries the public
+  download first; on 404 it asks GitHub for an installation token **limited to that one
+  repository, read-only, valid for an hour**, downloads through the API, and drops the token.
+  Only installations the tenant connected, on the repository's owner, are ever used.
 - **Terminal safety:** commands go through the same exec path as the API (gVisor, limits,
   metering); output is inserted as text, never HTML; requests carry the CSRF token in a header.
 
@@ -65,6 +73,23 @@ sign-in page. The privacy page lists exactly what the service stores and for how
 90 days, egress log 30 days, server logs 14 days, workspace files until the session closes), so
 update it if those change. Set `console_contact` (an email address) in `terraform.tfvars` to show
 a contact; without one the pages point to GitHub issues.
+
+## Setup: GitHub App (private repositories, optional)
+
+1. GitHub → Settings → Developer settings → **GitHub Apps → New GitHub App**:
+   - **GitHub App name:** e.g. `Airlock Sandbox` (must be unique on GitHub); its URL name is the slug.
+   - **Homepage URL:** `<server>/console`
+   - **Callback URL:** `<server>/console/github/callback` (`terraform output github_app_callback_url`)
+   - ☑ **Expire user authorization tokens** and ☑ **Request user authorization (OAuth) during installation**
+   - **Webhook:** untick **Active** (not used).
+   - **Repository permissions → Contents: Read-only** (Metadata: read-only is added automatically). Nothing else.
+   - **Where can this GitHub App be installed?** Any account.
+2. After creating it: note the **App ID**, the **Client ID** and the slug (from
+   `github.com/apps/<slug>`), **Generate a new client secret**, and **Generate a private key**
+   (a `.pem` file download). Save the `.pem` in `terraform/` (git-ignores `*.pem`).
+3. In `terraform.tfvars`: `github_app_id`, `github_app_slug`, `github_app_client_id`,
+   `github_app_client_secret`, `github_app_private_key_file = "<file>.pem"`, then
+   `scripts/deploy.sh` (it replaces the server once, since the boot script changes).
 
 ## Setup
 

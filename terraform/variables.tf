@@ -86,6 +86,37 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "github_app_id" {
+  description = "GitHub App ID, for private repository import. Empty = public repositories only."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_slug" {
+  description = "The app's URL name (github.com/apps/<slug>)."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_client_id" {
+  description = "The GitHub App's client ID (not the OAuth app's)."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_client_secret" {
+  description = "A client secret generated in the GitHub App's settings."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "github_app_private_key_file" {
+  description = "The app's private key (.pem), relative to terraform/. Git-ignored; never commit it."
+  type        = string
+  default     = ""
+}
+
 variable "console_contact" {
   description = "Contact shown on the console's privacy and terms pages (an email address). Empty = point people to GitHub issues."
   type        = string

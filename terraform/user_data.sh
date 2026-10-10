@@ -24,6 +24,11 @@ CONSOLE_SECRET_PARAM="${console_secret_param}"
 CONSOLE_ADMINS="${console_admins}"
 CONSOLE_SIGNUP="${console_signup}"
 CONSOLE_CONTACT="${console_contact}"
+GITHUB_APP_ID="${github_app_id}"
+GITHUB_APP_SLUG="${github_app_slug}"
+GITHUB_APP_CLIENT_ID="${github_app_client_id}"
+GITHUB_APP_SECRET_PARAM="${github_app_secret}"
+GITHUB_APP_KEY_PARAM="${github_app_key}"
 DOMAIN="${domain_name}"
 TLS_STATE_S3="${tls_state_s3}"
 ACME_EMAIL="${acme_email}"
@@ -177,6 +182,18 @@ export SANDBOX_CONSOLE_BASE_URL="$CONSOLE_BASE_URL"
 export SANDBOX_CONSOLE_ADMINS="$CONSOLE_ADMINS"
 export SANDBOX_CONSOLE_SIGNUP="$CONSOLE_SIGNUP"
 export SANDBOX_CONSOLE_CONTACT="$CONSOLE_CONTACT"
+EOF
+fi
+# GitHub App for private repository import (only when configured).
+if [ -n "$GITHUB_APP_ID" ]; then
+  cat >> "$APP_DIR/start.sh" <<EOF
+export SANDBOX_GITHUB_APP_ID="$GITHUB_APP_ID"
+export SANDBOX_GITHUB_APP_SLUG="$GITHUB_APP_SLUG"
+export SANDBOX_GITHUB_APP_CLIENT_ID="$GITHUB_APP_CLIENT_ID"
+export SANDBOX_GITHUB_APP_CLIENT_SECRET="\$(aws ssm get-parameter --region $AWS_REGION --name $GITHUB_APP_SECRET_PARAM \
+  --with-decryption --query Parameter.Value --output text)"
+export SANDBOX_GITHUB_APP_PRIVATE_KEY="\$(aws ssm get-parameter --region $AWS_REGION --name $GITHUB_APP_KEY_PARAM \
+  --with-decryption --query Parameter.Value --output text)"
 EOF
 fi
 echo "exec $APP_DIR/.venv/bin/python3 -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --proxy-headers" >> "$APP_DIR/start.sh"

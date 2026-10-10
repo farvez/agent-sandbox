@@ -106,6 +106,7 @@ def build_console_router(
     sessions=None,               # ConsoleSessions (server.py); None hides the workspace pages
     audit: Optional[Callable] = None,    # () -> AuditLog or None; None hides the Activity page
     notify: Optional[Callable] = None,   # (subject, message) -> None, e.g. email to the operator
+    github_app: Optional[Callable] = None,   # () -> GitHubApp or None; None hides private-repo import
 ) -> APIRouter:
     router = APIRouter(prefix="/console", include_in_schema=False)
     signer = Signer(config.session_secret)
@@ -209,7 +210,7 @@ def build_console_router(
 
     @router.get("/privacy", response_class=HTMLResponse)
     async def privacy(request: Request):
-        return render(request, "privacy.html", contact=config.contact, updated="8 October 2026")
+        return render(request, "privacy.html", contact=config.contact, updated="11 October 2026")
 
     @router.get("/terms", response_class=HTMLResponse)
     async def terms(request: Request):
@@ -436,6 +437,63 @@ def build_console_router(
         return redirect("/console/admin")
 
 
+    # ------------------------------------------------------------------ GitHub App (private repositories)
+
+    def gh_app():
+        return github_app() if github_app is not None else None
+
+    def not_enabled(request: Request):
+        return render(request, "message.html", 404, title="Not available",
+                      message="Private repositories aren't enabled on this server.")
+
+    @router.get("/github/connect")
+    @guarded
+    async def github_connect(request: Request):
+        require(request)
+        app = gh_app()
+        if app is None:
+            return not_enabled(request)
+        # Who installed it is confirmed on the way back (the user id behind GitHub's one-time code).
+        return redirect(app.install_url(state=secrets.token_urlsafe(16)))
+
+    @router.get("/github/callback")
+    @guarded
+    async def github_callback(request: Request, code: str = "", setup_action: str = ""):
+        from src.api.github_app import GitHubAppError
+
+        session = require(request)
+        app = gh_app()
+        if app is None:
+            return not_enabled(request)
+        response = redirect("/console/workspaces")
+        if setup_action == "request":
+            return set_flash(response, "ok", "GitHub asked an organisation owner to approve Airlock. "
+                                             "Once they have, click Connect GitHub again.")
+        if not code:
+            return set_flash(response, "error", "GitHub didn't confirm the connection. Click Connect GitHub to try again.")
+        try:
+            github_user_id, installations = await run_in_threadpool(app.user_installations, code)
+        except GitHubAppError as e:
+            return set_flash(response, "error", f"Couldn't connect GitHub: {e}")
+        if github_user_id != int(session["gid"]):
+            return set_flash(response, "error", f"GitHub authorized a different account than @{session['login']}. "
+                                                f"Sign in to GitHub as @{session['login']} and connect again.")
+        accounts().set_github_installations(session["tid"], [vars(i) for i in installations])
+        names = ", ".join(f"@{i.account}" for i in installations)
+        if not installations:
+            return set_flash(response, "error", "Airlock isn't installed on any GitHub account you can access yet.")
+        return set_flash(response, "ok", f"Connected GitHub ({names}). You can now import the private repositories "
+                                         "you gave Airlock access to.")
+
+    @router.post("/github/disconnect")
+    @guarded
+    async def github_disconnect(request: Request, csrf: str = Form("")):
+        session = require(request, csrf)
+        accounts().clear_github_installations(session["tid"])
+        return set_flash(redirect("/console/workspaces"), "ok",
+                         "Disconnected. Airlock no longer uses your GitHub installation; to remove its access on "
+                         "GitHub too, uninstall the app from your GitHub settings.")
+
     # ------------------------------------------------------------------ activity (command audit log)
 
     @router.get("/activity", response_class=HTMLResponse)
@@ -479,9 +537,14 @@ def build_console_router(
         return session
 
     def workspaces_page(request: Request, session: dict, error: Optional[str] = None, status_code: int = 200):
+        from src.api.github_app import Installation
+
         tenant = session["tid"]
+        installations = [Installation(i["id"], i["account"], i.get("account_type", "User"))
+                         for i in accounts().github_installations(tenant)] if gh_app() is not None else []
         return render(request, "workspaces.html", status_code, workspaces=sessions.list(tenant),
-                      egress=egress(tenant), limits=limits(tenant), ttl_minutes=sessions.ttl_seconds // 60, error=error)
+                      egress=egress(tenant), limits=limits(tenant), ttl_minutes=sessions.ttl_seconds // 60, error=error,
+                      github_enabled=gh_app() is not None, installations=installations)
 
     @router.get("/workspaces", response_class=HTMLResponse)
     @guarded

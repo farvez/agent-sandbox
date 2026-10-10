@@ -13,7 +13,7 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
 | POST | `/v1/sessions/{id}/exec` | `{command, timeout_seconds (1–60)}` | `{command, stdout, stderr, exit_code, timed_out, oom_killed, warnings, output}` · `429` too many commands running |
-| POST | `/v1/sessions/{id}/import` | `{repo, ref?, path?}` | `{repo, ref, path, files, archive_bytes}` — public GitHub repo unpacked into `/workspace/<path>` · `400` bad name · `404` not found/private · `409` folder exists · `413` too large · `422` unpack failed |
+| POST | `/v1/sessions/{id}/import` | `{repo, ref?, path?}` | `{repo, ref, path, files, archive_bytes}` — GitHub repo unpacked into `/workspace/<path>`; public, or private through the tenant's connected GitHub App installation · `400` bad name · `404` not found/private · `409` folder exists · `413` too large · `422` unpack failed |
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
 | GET | `/v1/egress/policy` | — | `{tenant_id, allowed}` — hosts this tenant may request |
@@ -95,6 +95,7 @@ the client) shows a tenant its limits and current usage; client errors carry
 | `SANDBOX_EGRESS_LOG_DIR` | system temp dir | Where proxies write `<session_id>.jsonl` |
 | `SANDBOX_EGRESS_DNS` | detected | Comma-separated DNS servers for the proxies (default: host's non-loopback nameservers) |
 | `SANDBOX_IMPORT_MAX_MB` | `100` | Largest GitHub archive `/import` downloads |
+| `SANDBOX_GITHUB_APP_ID`, `_SLUG`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY` | unset | All five enable private repository import through a GitHub App |
 | `SANDBOX_AUDIT` | unset | `dynamodb:<table>` (key `tenant` + sort key `sk`, TTL on `expires_at`) or `sqlite:<path>`: enables the command audit log |
 | `SANDBOX_AUDIT_RETENTION_DAYS` | `90` | Days audit entries are kept |
 | `SANDBOX_NOTIFY_TOPIC_ARN` | unset | SNS topic for operator notices (new invite requests) |

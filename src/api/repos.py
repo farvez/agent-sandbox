@@ -18,7 +18,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-ALLOWED_HOSTS = {"github.com", "codeload.github.com"}
+ALLOWED_HOSTS = {"github.com", "codeload.github.com", "api.github.com"}
 OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
@@ -48,6 +48,12 @@ class RepoRef:
     @property
     def archive_url(self) -> str:
         return f"https://github.com/{self.owner}/{self.name}/archive/{urllib.parse.quote(self.ref, safe='/')}.tar.gz"
+
+    @property
+    def api_tarball_url(self) -> str:
+        """The API form, for private repositories (needs a token); no ref = the default branch."""
+        ref = "" if self.ref == "HEAD" else "/" + urllib.parse.quote(self.ref, safe="/")
+        return f"https://api.github.com/repos/{self.owner}/{self.name}/tarball{ref}"
 
 
 def parse_repo(spec: str, ref: Optional[str] = None) -> RepoRef:
@@ -99,19 +105,31 @@ class _GitHubOnlyRedirects(urllib.request.HTTPRedirectHandler):
 
 def _default_opener() -> Callable:
     opener = urllib.request.build_opener(_GitHubOnlyRedirects())
-    return lambda url: opener.open(urllib.request.Request(url, headers={"User-Agent": "airlock-sandbox"}), timeout=30)
+
+    def open_url(url: str, headers: Optional[dict] = None):
+        return opener.open(urllib.request.Request(url, headers={"User-Agent": "airlock-sandbox", **(headers or {})}),
+                           timeout=30)
+
+    return open_url
 
 
-def fetch_archive(repo: RepoRef, max_bytes: Optional[int] = None, open_url: Optional[Callable] = None) -> bytes:
-    """Downloads the repository's .tar.gz, refusing anything over `max_bytes`."""
+def fetch_archive(repo: RepoRef, max_bytes: Optional[int] = None, open_url: Optional[Callable] = None,
+                  token: Optional[str] = None) -> bytes:
+    """Downloads the repository's .tar.gz, refusing anything over `max_bytes`. With `token` (a
+    GitHub App installation token) it uses the API, which also serves private repositories."""
     max_bytes = max_archive_bytes() if max_bytes is None else max_bytes
     open_url = open_url or _default_opener()
     try:
-        response = open_url(repo.archive_url)
+        if token:
+            response = open_url(repo.api_tarball_url, {"Authorization": f"Bearer {token}",
+                                                       "Accept": "application/vnd.github+json"})
+        else:
+            response = open_url(repo.archive_url)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise RepoImportError(
-                f"{repo.full_name}@{repo.ref} wasn't found. Only public repositories can be imported for now.", 404)
+                f"{repo.full_name}@{repo.ref} wasn't found. For a private repository, connect GitHub in the "
+                "console (Workspaces → Private repositories) and give Airlock access to it.", 404)
         raise RepoImportError(f"GitHub answered {e.code} for {repo.full_name}.", 502)
     except RepoImportError:
         raise

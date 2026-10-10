@@ -5,6 +5,7 @@ Items are addressed by a string key:
     invite#<github_login>         permission to sign up (invite-only mode)
     request#<github_login>        a signed-in GitHub user asking for an invite
     block#<github_login>          access removed by an admin: no sign-in, no requests
+    ghapp#<tenant>                GitHub App installations the tenant connected (private repos)
     usage#<tenant>#<YYYY-MM>      monthly counters: sessions, commands, command_seconds
 
 Backends (SANDBOX_ACCOUNTS): dynamodb:<table> on the server, sqlite:<path> locally.
@@ -216,6 +217,23 @@ class AccountStore:
 
     def list_requests(self) -> List[dict]:
         return sorted(self._items.prefix("request#"), key=lambda r: r.get("requested_at", 0))
+
+    # ---------------------------------------------------------------- GitHub App installations
+
+    def set_github_installations(self, tenant_id: str, installations: List[dict]) -> None:
+        """Replaces the tenant's connected installations: [{id, account, account_type}, ...]."""
+        self._items.put(f"ghapp#{tenant_id}", {
+            "tenant_id": tenant_id, "linked_at": self._clock(),
+            "installations": [{"id": int(i["id"]), "account": str(i["account"]),
+                               "account_type": str(i.get("account_type", "User"))} for i in installations],
+        })
+
+    def github_installations(self, tenant_id: str) -> List[dict]:
+        item = self._items.get(f"ghapp#{tenant_id}") or {}
+        return [{**i, "id": int(i["id"])} for i in item.get("installations", [])]
+
+    def clear_github_installations(self, tenant_id: str) -> None:
+        self._items.delete(f"ghapp#{tenant_id}")
 
     # ---------------------------------------------------------------- usage metering
 

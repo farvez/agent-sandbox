@@ -246,7 +246,7 @@ class RemoteMcp:
 
         @server.tool(annotations=ToolAnnotations(title="Import a GitHub repository", destructive_hint=False))
         async def import_repo(repo: str, ref: str = "", path: str = "", ctx: Context = None) -> str:
-            """Copy a public GitHub repository into the sandbox workspace.
+            """Copy a GitHub repository into the sandbox workspace: any public one, or a private one the user connected in the Airlock console.
 
             repo is "owner/repo" or https://github.com/owner/repo. ref is a branch, tag or commit
             (default: the default branch); path is the folder under /workspace (default: the repo

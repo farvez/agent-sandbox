@@ -183,3 +183,8 @@ td.cmd { min-width: 220px; }
 .policy-table td { vertical-align: top; font-size: .92rem; }
 .policy-table td:last-child { white-space: nowrap; }
 @media (max-width: 560px) { .policy-table td:last-child { white-space: normal; } }
+
+/* Private repositories */
+section.github { margin-top: 20px; }
+section.github .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+section.github .row form { margin: 0; }

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from src.api.accounts import AccountStore
 from src.api.audit import AuditLog
+from src.api.github_app import GitHubApp, GitHubAppError
 from src.api.keystore import KeyLimitReached, KeyStore, LastActiveKey, UnknownKey
 from src.api.limits import LimitExceeded, LimitTracker, load_tenant_limits
 from src.api import session_state
@@ -109,6 +110,26 @@ def record_usage(tenant_id: str, **counters: float) -> None:
 # Per-tenant command audit log (optional): every exec and import, never the output.
 AUDIT = AuditLog.from_config(os.getenv("SANDBOX_AUDIT"), region=os.getenv("AWS_REGION"),
                              retention_days=int(os.getenv("SANDBOX_AUDIT_RETENTION_DAYS", "90")))
+
+
+# GitHub App for private repository import (optional; see src/api/github_app.py).
+GITHUB_APP = GitHubApp.from_env()
+
+
+def private_repo_token(tenant_id: str, repo) -> Optional[str]:
+    """A one-hour, read-only token for one private repository, from an installation of the
+    GitHub App that this tenant connected on the repository's owner; None if there isn't one."""
+    if GITHUB_APP is None or ACCOUNTS is None:
+        return None
+    for installation in ACCOUNTS.github_installations(tenant_id):
+        if installation["account"].lower() == repo.owner.lower():
+            try:
+                token = GITHUB_APP.repo_token(installation["id"], repo.name)
+            except GitHubAppError as e:
+                raise RepoImportError(str(e), 502)
+            if token:
+                return token
+    return None
 
 
 def record_audit(tenant_id: str, **entry) -> None:
@@ -448,7 +469,14 @@ def import_repo_into(rec: SessionRecord, repo: str, ref: Optional[str] = None, p
     try:
         parsed = parse_repo(repo, ref)
         dest = clean_destination(path, parsed)
-        archive = fetch_archive(parsed)
+        try:
+            archive = fetch_archive(parsed)
+        except RepoImportError as public_error:
+            # Not public (or not there): try the tenant's connected GitHub App installation.
+            token = private_repo_token(rec.tenant_id, parsed) if public_error.status == 404 else None
+            if token is None:
+                raise
+            archive = fetch_archive(parsed, token=token)
         with LIMITS.running_command(rec.tenant_id):
             result = import_archive(rec.workspace, parsed, archive, dest)
     except (RepoImportError, QuotaExceededError) as e:
@@ -843,6 +871,7 @@ if CONSOLE is not None:
         egress=tenant_egress,
         sessions=ConsoleSessions(),
         audit=lambda: AUDIT,
+        github_app=lambda: GITHUB_APP,
         notify=sns_notifier(os.getenv("SANDBOX_NOTIFY_TOPIC_ARN")),
     ))
 

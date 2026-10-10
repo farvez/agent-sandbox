@@ -104,7 +104,7 @@ def test_fetch_maps_404_to_a_friendly_error():
     def missing(url):
         raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
-    with pytest.raises(RepoImportError, match="public repositories") as e:
+    with pytest.raises(RepoImportError, match="connect GitHub") as e:
         fetch_archive(RepoRef("o", "private"), 100, missing)
     assert e.value.status == 404
 

@@ -25,3 +25,5 @@ terraform/backend.hcl
 # Internal notes kept locally, not published
 docs/positioning.html
 .plan.txt
+# Private keys (e.g. the GitHub App's .pem) never go in git
+*.pem

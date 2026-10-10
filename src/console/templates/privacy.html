@@ -32,6 +32,10 @@
     <tr><td>Monthly usage totals: sessions, commands and sandbox time</td>
         <td>To show your usage and set fair limits</td>
         <td>Until you ask us to delete them</td></tr>
+    <tr><td>If you connect GitHub for private repositories: the installation ID and the account names it covers</td>
+        <td>To import the repositories you chose. We read a repository's contents only when you import it, with a token
+            that lasts an hour, covers that one repository and is never stored.</td>
+        <td>Until you disconnect</td></tr>
     <tr><td>Files in your workspaces</td>
         <td>So your code persists between commands</td>
         <td>Deleted when the session closes (when you close it, or after 30 minutes without use)</td></tr>
@@ -53,7 +57,7 @@
 <h2>Who else handles it</h2>
 <ul>
   <li><strong>Amazon Web Services</strong> hosts the service and its databases in the United States (us-east-1).</li>
-  <li><strong>GitHub</strong> handles sign-in.</li>
+  <li><strong>GitHub</strong> handles sign-in and, if you connect it, private repository access.</li>
   <li>When you request an invite, its details are emailed to the operator through Amazon SNS.</li>
 </ul>
 <p>We don't sell your data, show ads, or use third-party analytics. We disclose data only if the law requires it.</p>

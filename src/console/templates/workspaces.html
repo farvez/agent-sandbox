@@ -34,6 +34,28 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
   </form>
 </section>
 
+{% if github_enabled %}
+<section class="card github">
+  <h2>Private repositories</h2>
+  {% if installations %}
+  <p>Airlock can import the private repositories you selected on
+    {% for i in installations %}<a href="{{ i.settings_url() }}" rel="noopener noreferrer">@{{ i.account }}</a>{{ ", " if not loop.last }}{% endfor %}
+    (read-only). Import them like public ones: <code>owner/repo</code>.</p>
+  <div class="row">
+    <a class="button" href="/console/github/connect">Add another account or change repositories</a>
+    <form method="post" action="/console/github/disconnect" data-confirm="Stop using your GitHub connection for imports?">
+      <input type="hidden" name="csrf" value="{{ session.csrf }}">
+      <button class="button" type="submit">Disconnect</button>
+    </form>
+  </div>
+  {% else %}
+  <p>Connect GitHub to import private repositories. You choose which repositories Airlock may
+    read; it gets read-only access to their contents, and nothing else.</p>
+  <a class="button primary" href="/console/github/connect">Connect GitHub</a>
+  {% endif %}
+</section>
+{% endif %}
+
 <section>
   <h2>Open workspaces</h2>
   {% if workspaces %}

@@ -344,6 +344,11 @@ resource "aws_instance" "sandbox_host" {
     console_admins       = join(",", var.console_admins)
     console_signup       = var.console_signup
     console_contact      = var.console_contact
+    github_app_id        = var.github_app_id
+    github_app_slug      = var.github_app_slug
+    github_app_client_id = var.github_app_client_id
+    github_app_secret    = local.github_app_enabled ? aws_ssm_parameter.github_app_client_secret[0].name : ""
+    github_app_key       = local.github_app_enabled ? aws_ssm_parameter.github_app_private_key[0].name : ""
     tls_state_s3         = "s3://${aws_s3_bucket.artifacts.id}/tls/caddy"
     acme_email           = var.acme_email
     audit_table          = aws_dynamodb_table.audit.name
