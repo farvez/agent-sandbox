@@ -51,7 +51,12 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
   {% else %}
   <p>Connect GitHub to import private repositories. You choose which repositories Airlock may
     read; it gets read-only access to their contents, and nothing else.</p>
-  <a class="button primary" href="/console/github/connect">Connect GitHub</a>
+  <div class="row">
+    <a class="button primary" href="/console/github/connect">Connect GitHub</a>
+    <a class="button" href="/console/github/link">Link an existing installation</a>
+  </div>
+  <p class="muted small">Already installed the Airlock app on GitHub (or reconnecting after a disconnect)? Use
+    <strong>Link an existing installation</strong>; it skips the install page.</p>
   {% endif %}
 </section>
 {% endif %}

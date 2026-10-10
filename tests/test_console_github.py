@@ -30,6 +30,9 @@ class FakeApp:
     def install_url(self, state):
         return f"https://github.com/apps/{self.slug}/installations/new?state={state}"
 
+    def authorize_url(self, state, redirect_uri):
+        return f"https://github.com/login/oauth/authorize?client_id=Iv1.app&redirect_uri={redirect_uri}&state={state}"
+
     def user_installations(self, code):
         if code not in self.codes:
             raise GitHubAppError("The code passed is incorrect or expired.")
@@ -152,3 +155,14 @@ def test_other_tenants_cannot_use_the_installation(client, private_setup):
     sid = client.post("/v1/sessions", json={}, headers=OTHER_TENANT).json()["session_id"]
     res = client.post(f"/v1/sessions/{sid}/import", json={"repo": "acme-org/secret-repo"}, headers=OTHER_TENANT)
     assert res.status_code == 404 and private_setup[-1][1] is None   # never even asked for a token
+
+
+def test_link_existing_installation_authorizes_without_installing(console):
+    client, accounts = console
+    assert 'href="/console/github/link"' in client.get("/console/workspaces").text
+    res = client.get("/console/github/link")
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("https://github.com/login/oauth/authorize?client_id=Iv1.app")
+    assert "redirect_uri=https://console.test/console/github/callback" in res.headers["location"]
+    client.get("/console/github/callback?code=good")      # GitHub comes back with a code, no installation_id
+    assert [i["id"] for i in accounts.github_installations("gh-farvez")] == [11, 22]

@@ -84,6 +84,12 @@ class GitHubApp:
     def install_url(self, state: str) -> str:
         return f"https://github.com/apps/{self.slug}/installations/new?" + urllib.parse.urlencode({"state": state})
 
+    def authorize_url(self, state: str, redirect_uri: str) -> str:
+        """For an app that's already installed: authorize only (no install page), which brings
+        the user back with the same one-time code, so their installations can be linked."""
+        return "https://github.com/login/oauth/authorize?" + urllib.parse.urlencode(
+            {"client_id": self.client_id, "redirect_uri": redirect_uri, "state": state})
+
     # ------------------------------------------------------------------ linking (console)
 
     def user_installations(self, code: str) -> Tuple[int, List[Installation]]:

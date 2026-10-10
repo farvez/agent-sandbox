@@ -456,6 +456,16 @@ def build_console_router(
         # Who installed it is confirmed on the way back (the user id behind GitHub's one-time code).
         return redirect(app.install_url(state=secrets.token_urlsafe(16)))
 
+    @router.get("/github/link")
+    @guarded
+    async def github_link(request: Request):
+        require(request)
+        app = gh_app()
+        if app is None:
+            return not_enabled(request)
+        # Already installed on GitHub: just authorize, and the callback links the installations.
+        return redirect(app.authorize_url(secrets.token_urlsafe(16), f"{config.base_url}/console/github/callback"))
+
     @router.get("/github/callback")
     @guarded
     async def github_callback(request: Request, code: str = "", setup_action: str = ""):

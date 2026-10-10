@@ -119,3 +119,12 @@ def test_private_download_uses_the_api_with_the_token():
     assert seen == [("https://api.github.com/repos/acme-org/secret/tarball",
                      {"Authorization": "Bearer ghs_x", "Accept": "application/vnd.github+json"})]
     assert RepoRef("o", "r", "v1.2").api_tarball_url == "https://api.github.com/repos/o/r/tarball/v1.2"
+
+
+def test_authorize_url_for_an_existing_installation(keys):
+    from urllib.parse import parse_qs, urlparse
+
+    url = make_app(keys, FakeGitHub({})).authorize_url("st", "https://x.test/console/github/callback")
+    assert url.startswith("https://github.com/login/oauth/authorize?")
+    assert parse_qs(urlparse(url).query) == {"client_id": ["Iv1.client"], "state": ["st"],
+                                             "redirect_uri": ["https://x.test/console/github/callback"]}
