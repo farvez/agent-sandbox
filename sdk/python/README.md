@@ -54,6 +54,24 @@ with Sandbox(egress=["pypi"]) as sbx:
 Public repositories only. The server downloads the archive (up to 100 MB) and unpacks it
 inside the sandbox, within the workspace disk quota, so this works without egress.
 
+## Upload, download and snapshots
+
+```python
+with Sandbox() as sbx:
+    sbx.files.upload("data/input.parquet", open("input.parquet", "rb").read())  # any bytes, up to 50 MB
+    sbx.run("python3 analyse.py > out/report.csv").check()
+    open("report.csv", "wb").write(sbx.files.download("out/report.csv"))
+    open("out.tar.gz", "wb").write(sbx.files.download_archive("out"))           # a folder as .tar.gz
+
+    snap = sbx.snapshot("deps installed")      # outlives the session (kept 30 days on the hosted service)
+
+with Sandbox(snapshot=snap["id"]) as sbx:      # starts with the snapshot's files
+    print(sbx.run("ls").stdout)
+```
+
+`sbx.restore(id, path=".")` unpacks a snapshot into a running sandbox; `sbx.list_snapshots()` and
+`sbx.delete_snapshot(id)` manage them. Snapshots include installed packages under `/workspace/.local`.
+
 ## Internet access (egress)
 
 Sandboxes have no network by default. Ask for specific hosts — they must be allowed by
@@ -105,7 +123,7 @@ claude mcp add --transport http --scope user airlock "https://<server>/mcp?egres
 - There's one sandbox per key, reused by every call and reconnect; it closes after 30 minutes
   idle. Add `&workspace=<name>` for a separate sandbox.
 - Tools: `run_command`, `write_file`, `read_file`, `list_files`, `import_repo`, `egress_log`,
-  `activity`, `sandbox_info`, `reset_sandbox`. Commands show up in the console's Activity page
+  `activity`, `save_snapshot`, `list_snapshots`, `restore_snapshot`, `sandbox_info`, `reset_sandbox`. Commands show up in the console's Activity page
   as `mcp key <id>`.
 
 **Local:** the package also includes an MCP server that runs on your machine over stdio and
@@ -160,7 +178,7 @@ files), and `uvx` adds an install on the first start after each release. Two fix
 On Windows, if Claude Desktop can't find the command, use its full path (`where airlock-sandbox-mcp`).
 
 **Tools:** `run_command`, `write_file`, `read_file`, `list_files`, `import_repo`, `egress_log`,
-`activity`, `sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
+`activity`, `save_snapshot`, `list_snapshots`, `restore_snapshot`, `sandbox_info`, `reset_sandbox`. Each MCP server process gets one sandbox session, created
 on first use and deleted when the client disconnects; files persist between commands
 within it. `AIRLOCK_EGRESS` (or `--egress`) sets which hosts the sandbox may reach — it
 must be allowed by your tenant's policy; leave it unset for no network.

@@ -2,6 +2,16 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.6.0 — 2026-10-11
+
+- Binary files: `sbx.files.upload(path, data)` (bytes or str), `sbx.files.download(path)` (bytes),
+  and `sbx.files.download_archive(path=".")` (a folder as `.tar.gz` bytes).
+- Snapshots: `sbx.snapshot(name=None, path=".")`, `sbx.restore(snapshot_id, path=".")`,
+  `sbx.list_snapshots()`, `sbx.delete_snapshot(id)`, and `Sandbox(snapshot=id)` to start a new
+  sandbox with a snapshot's files.
+- MCP server: new `save_snapshot`, `list_snapshots` and `restore_snapshot` tools.
+- Needs a server with the `/files`, `/archive` and snapshot endpoints (snapshots must be enabled).
+
 ## 0.5.0 — 2026-10-08
 
 - `Sandbox.audit(limit=100, before=None)`: this tenant's command history (commands and outcomes,

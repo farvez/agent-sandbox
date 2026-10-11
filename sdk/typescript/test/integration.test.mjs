@@ -17,6 +17,13 @@ test("full lifecycle against the real API", async () => {
     await assert.rejects(sbx.files.read("missing.py"), FileNotFoundError);
     await assert.rejects(sbx.files.write("../escape.txt", "x"), PermissionDeniedError);
 
+    const bytes = new Uint8Array(256).map((_, i) => i);
+    assert.equal(await sbx.files.upload("bin/all.bin", bytes), 256);
+    assert.deepEqual(await sbx.files.download("bin/all.bin"), bytes);
+    const archive = await sbx.files.downloadArchive("bin");
+    assert.deepEqual([...archive.slice(0, 2)], [0x1f, 0x8b]); // gzip
+    await assert.rejects(sbx.files.download("missing.bin"), NotFoundError);
+
     const ran = await sbx.run("python3 hello.py");
     assert.ok(ran.ok);
     assert.match(ran.stdout, /ran python3 hello.py/);

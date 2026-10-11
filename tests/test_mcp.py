@@ -12,7 +12,7 @@ from airlock_sandbox import Sandbox
 from airlock_sandbox.mcp_server import SandboxHolder, build_server
 from tests.test_sdk import KEY, api_url, fake_github_import, fresh_state  # noqa: F401  (pytest fixtures)
 
-TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "activity", "sandbox_info", "reset_sandbox"]
+TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "activity", "save_snapshot", "list_snapshots", "restore_snapshot", "sandbox_info", "reset_sandbox"]
 
 
 def make_holder(url, egress=None):
@@ -200,3 +200,21 @@ def test_activity_tool(api_url, monkeypatch, tmp_path):
         return await c.call_tool("activity", {"limit": 5})
     result = call(make_holder(api_url), steps)
     assert not result.is_error and "exit 0" in text(result) and "python3 x.py" in text(result)
+
+
+def test_snapshot_tools(api_url, monkeypatch, tmp_path):
+    from src.api.snapshots import SnapshotStore, _DirBackend
+
+    monkeypatch.setattr(server, "SNAPSHOTS", SnapshotStore(_DirBackend(str(tmp_path))))
+
+    async def steps(c):
+        await c.call_tool("write_file", {"path": "a.py", "content": "print(1)"})
+        saved = text(await c.call_tool("save_snapshot", {"name": "first"}))
+        listed = text(await c.call_tool("list_snapshots", {}))
+        snap_id = saved.split()[2]
+        restored = text(await c.call_tool("restore_snapshot", {"snapshot_id": snap_id, "path": "old"}))
+        return saved, listed, restored, text(await c.call_tool("read_file", {"path": "old/a.py"}))
+
+    saved, listed, restored, content = call(make_holder(api_url), steps)
+    assert saved.startswith("Saved snapshot snap_") and "first" in listed
+    assert "into old" in restored and content == "print(1)"

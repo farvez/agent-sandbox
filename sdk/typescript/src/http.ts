@@ -1,6 +1,6 @@
 import { APIConnectionError, RateLimitError, SandboxError, STATUS_ERRORS } from "./errors.js";
 
-const IDEMPOTENT = new Set(["GET", "DELETE"]);
+const IDEMPOTENT = new Set(["GET", "PUT", "DELETE"]);
 
 export interface HttpOptions {
   baseUrl: string;
@@ -19,6 +19,10 @@ export interface HttpOptions {
 export interface RequestOptions {
   timeoutMs?: number;
   retries?: number;
+  /** Raw bytes to send instead of a JSON body. */
+  data?: Uint8Array;
+  /** Return the response bytes (a Uint8Array) instead of parsed JSON. */
+  raw?: boolean;
 }
 
 /** Small client on fetch, with the same retry rules as the Python SDK. */
@@ -46,7 +50,7 @@ export class HttpClient {
   async request<T = any>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.send<T>(method, path, body, options.timeoutMs);
+        return await this.send<T>(method, path, body, options);
       } catch (err) {
         const wait = this.retryWait(err, method, attempt, options.retries);
         if (wait === undefined) throw err;
@@ -69,24 +73,25 @@ export class HttpClient {
     return undefined;
   }
 
-  private async send<T>(method: string, path: string, body: unknown, timeoutMs?: number): Promise<T> {
+  private async send<T>(method: string, path: string, body: unknown, options: RequestOptions): Promise<T> {
     let response: Response;
     try {
       response = await this.fetchFn(this.baseUrl + path, {
         method,
         headers: {
           "X-API-Key": this.apiKey,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+          "Content-Type": options.data ? "application/octet-stream" : "application/json",
+          Accept: options.raw ? "*/*" : "application/json",
           "User-Agent": this.userAgent,
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
+        body: options.data ?? (body === undefined ? undefined : JSON.stringify(body)),
+        signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new APIConnectionError(`Could not reach ${this.baseUrl}: ${reason}`);
     }
+    if (options.raw && response.ok) return new Uint8Array(await response.arrayBuffer()) as T;
     const text = await response.text();
     if (!response.ok) throw this.httpError(response, text);
     return (text ? JSON.parse(text) : undefined) as T;

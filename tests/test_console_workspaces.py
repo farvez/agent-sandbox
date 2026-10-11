@@ -83,6 +83,52 @@ class FakeSessions:
         del self.sessions[sid]
         self.calls.append(("destroy", sid))
 
+    # files and snapshots
+    upload_max_bytes = 1000
+    snapshots_enabled = True
+
+    def upload(self, tenant, sid, path, data, actor=None):
+        self._owned(tenant, sid)
+        self._check()
+        self.calls.append(("upload", sid, path, data))
+        return {"path": path, "size_bytes": len(data)}
+
+    def download(self, tenant, sid, path, actor=None):
+        self._owned(tenant, sid)
+        self._check()
+        self.calls.append(("download", sid, path))
+        return b"\x00file-bytes"
+
+    def download_archive(self, tenant, sid, path, actor=None):
+        self._owned(tenant, sid)
+        self.calls.append(("archive", sid, path))
+        return b"\x1f\x8barchive"
+
+    def snapshot(self, tenant, sid, name, actor=None):
+        self._owned(tenant, sid)
+        self._check()
+        snap = {"id": "snap_0123456789ab", "name": name or "snapshot", "size_bytes": 2**20, "session_id": sid,
+                "created_at": 1.0, "expires_at": 86401.0, "tenant": tenant}
+        self.saved = getattr(self, "saved", []) + [snap]
+        return snap
+
+    def snapshots(self, tenant):
+        return [s for s in getattr(self, "saved", []) if s["tenant"] == tenant]
+
+    def create_from_snapshot(self, tenant, egress, snapshot_id, actor=None):
+        if not any(s["id"] == snapshot_id for s in self.snapshots(tenant)):
+            raise HTTPException(404, f"Snapshot {snapshot_id} not found.")
+        created = self.create(tenant, egress)
+        self.calls.append(("restore", created["session_id"], snapshot_id))
+        return created
+
+    def delete_snapshot(self, tenant, snapshot_id):
+        mine = [s for s in self.snapshots(tenant) if s["id"] == snapshot_id]
+        if not mine:
+            raise HTTPException(404, f"Snapshot {snapshot_id} not found.")
+        self.saved.remove(mine[0])
+        return mine[0]
+
 
 @pytest.fixture
 def console(tmp_path):
@@ -291,3 +337,66 @@ def test_terminal_commands_are_audited_as_typed_by_the_signed_in_user(console):
     sid, _ = start(client, csrf)
     client.post(f"/console/workspaces/{sid}/exec", headers={"X-CSRF-Token": csrf}, json={"command": "ls -la"})
     assert sessions.last_actor == "console @Farvez" and sessions.last_audit_command == "ls -la"
+
+
+# ---------------------------------------------------------------- files and snapshots
+
+
+def test_upload_needs_csrf_header_and_respects_the_limit(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf)
+    url = f"/console/workspaces/{sid}/upload?path=data/a.bin"
+    assert client.post(url, content=b"\x00\x01").status_code == 401
+    res = client.post(url, content=b"\x00\x01", headers={"X-CSRF-Token": csrf})
+    assert res.status_code == 200 and res.json() == {"path": "data/a.bin", "size_bytes": 2}
+    assert sessions.calls[-1] == ("upload", sid, "data/a.bin", b"\x00\x01")
+    big = client.post(url, content=b"x" * 1001, headers={"X-CSRF-Token": csrf})
+    assert big.status_code == 413
+    sessions.fail = HTTPException(403, "Access denied: '../x' is outside the workspace.")
+    assert client.post(url, content=b"x", headers={"X-CSRF-Token": csrf}).json()["error"].startswith("Access denied")
+
+
+def test_download_file_and_folder(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf)
+    res = client.get(f"/console/workspaces/{sid}/download", params={"path": "out/report.csv"})
+    assert res.status_code == 200 and res.content == b"\x00file-bytes"
+    assert 'filename="report.csv"' in res.headers["content-disposition"]
+    assert res.headers["cache-control"] == "no-store"
+    res = client.get(f"/console/workspaces/{sid}/download", params={"path": ".", "folder": "1"})
+    assert res.headers["content-type"] == "application/gzip"
+    assert 'filename="workspace.tar.gz"' in res.headers["content-disposition"]
+    sessions.fail = HTTPException(404, "'nope' doesn't exist.")
+    res = client.get(f"/console/workspaces/{sid}/download", params={"path": "nope"})
+    assert res.status_code == 404 and "doesn&#39;t exist" in res.text
+    client.cookies.clear()
+    assert client.get(f"/console/workspaces/{sid}/download", params={"path": "a"}).status_code == 303
+
+
+def test_workspace_page_shows_files_and_snapshot_panels(console):
+    client, _, csrf = console
+    sid, _ = start(client, csrf)
+    page = client.get(f"/console/workspaces/{sid}").text
+    assert 'id="upload-form"' in page and "Save snapshot" in page
+
+
+def test_snapshot_then_start_from_it_and_delete(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf)
+    assert client.post(f"/console/workspaces/{sid}/snapshot", data={"csrf": "wrong", "name": "x"}).status_code in (303, 403)
+    res = client.post(f"/console/workspaces/{sid}/snapshot", data={"csrf": csrf, "name": "before"})
+    assert res.status_code == 303
+    page = client.get("/console/workspaces").text
+    assert "snap_0123456789ab" in page and "before" in page
+
+    res = client.post("/console/snapshots/snap_0123456789ab/start", data={"csrf": csrf, "internet": "1"})
+    assert res.status_code == 303
+    new_sid = res.headers["location"].rsplit("/", 1)[-1]
+    assert ("restore", new_sid, "snap_0123456789ab") in sessions.calls
+    assert sessions.sessions[new_sid]["egress"] == EGRESS
+
+    res = client.post("/console/snapshots/snap_404404404404/start", data={"csrf": csrf})
+    assert res.status_code == 404 and "not found" in res.text
+
+    assert client.post("/console/snapshots/snap_0123456789ab/delete", data={"csrf": csrf}).status_code == 303
+    assert "snap_0123456789ab" not in client.get("/console/workspaces").text

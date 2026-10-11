@@ -87,6 +87,39 @@ def test_container_symlink_cannot_expose_host_files(workspace, outside_dir):
         workspace.read_file("leak")
 
 
+def test_binary_download_refuses_container_symlinks(workspace, outside_dir):
+    from src.sandbox.files import WorkspaceFileError
+
+    target = os.path.join(outside_dir, "secret.txt").replace("\\", "/")
+    workspace.run_command(f"ln -s '{target}' leak && ln -s /etc/passwd leak2")
+    for name in ("leak", "leak2"):
+        with pytest.raises(WorkspaceFileError):
+            workspace.read_bytes(name, 10_000)
+        with pytest.raises(WorkspaceFileError):
+            workspace.write_bytes(name, b"overwrite")
+    with open(os.path.join(outside_dir, "secret.txt")) as f:
+        assert f.read() == "HOST SECRET"
+
+
+def test_archive_and_extract_round_trip(workspace):
+    import io
+    import tarfile
+
+    workspace.write_bytes("proj/data.bin", bytes(range(256)))
+    workspace.run_command("ln -s /etc/passwd proj/link")
+    archive = workspace.archive("proj", 10 * 2**20)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        names = tar.getnames()
+        link = tar.getmember("proj/link")
+    assert "proj/data.bin" in names and link.issym()        # links archived as links, never followed
+    assert not any(n.startswith(".airlock-") for n in names)
+
+    workspace.extract(archive, "restored")
+    assert workspace.read_bytes("restored/proj/data.bin", 1000) == bytes(range(256))
+    leftovers = [n for n in os.listdir(workspace.workspace_dir) if n.startswith(".airlock-")]
+    assert leftovers == []
+
+
 # ---------------------------------------------------------------- egress gateway
 # These reach the real internet (PyPI) through the proxy.
 

@@ -1,5 +1,5 @@
 export { Sandbox, CommandResult, Files, DEFAULT_TEMPLATE } from "./sandbox.js";
-export type { SandboxOptions, RunOptions, ImportResult, AuditEntry } from "./sandbox.js";
+export type { SandboxOptions, RunOptions, ImportResult, AuditEntry, Snapshot } from "./sandbox.js";
 export {
   SandboxError,
   APIConnectionError,

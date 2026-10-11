@@ -14,10 +14,12 @@ function fakeServer(routes) {
   const fetch = async (url, init) => {
     const { pathname, search } = new URL(url);
     const key = `${init.method} ${pathname}`;
-    calls.push({ key, search, body: init.body ? JSON.parse(init.body) : undefined, headers: init.headers });
+    const sent = typeof init.body === "string" ? JSON.parse(init.body) : init.body;
+    calls.push({ key, search, body: sent, headers: init.headers });
     const handler = routes[key];
     if (!handler) return new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 });
-    const out = await handler({ search, body: init.body ? JSON.parse(init.body) : undefined, calls });
+    const out = await handler({ search, body: sent, calls });
+    if (out instanceof Response) return out;
     if (out instanceof Error) throw out;
     const [status, body, headers] = Array.isArray(out) ? out : [200, out];
     return new Response(body === undefined ? "" : JSON.stringify(body), { status, headers });
@@ -199,4 +201,43 @@ test("the CommonJS build loads with require()", () => {
   const cjs = require("../dist/cjs/index.js");
   assert.equal(typeof cjs.Sandbox, "function");
   assert.equal(cjs.VERSION, VERSION);
+});
+
+test("files upload and download raw bytes", async () => {
+  let stored;
+  const server = fakeServer({
+    ...SESSION,
+    "PUT /v1/sessions/sbx_1/files": ({ body }) => { stored = body; return { path: "a.bin", size_bytes: body.length }; },
+    "GET /v1/sessions/sbx_1/files": ({ search }) => search.includes("missing")
+      ? [404, { detail: "'missing' doesn't exist." }] : new Response(stored, { status: 200 }),
+    "GET /v1/sessions/sbx_1/archive": () => new Response(new Uint8Array([31, 139]), { status: 200 }),
+  });
+  const sbx = await Sandbox.create(opts(server));
+  assert.equal(await sbx.files.upload("dir/a.bin", new Uint8Array([0, 255, 7])), 3);
+  const put = server.calls.at(-1);
+  assert.equal(put.search, "?path=dir%2Fa.bin");
+  assert.equal(put.headers["Content-Type"], "application/octet-stream");
+  assert.deepEqual([...(await sbx.files.download("dir/a.bin"))], [0, 255, 7]);
+  assert.deepEqual([...(await sbx.files.downloadArchive())], [31, 139]);
+  assert.equal(await sbx.files.upload("t.txt", "hé"), 3);
+  await assert.rejects(sbx.files.download("missing"), NotFoundError);
+});
+
+test("snapshots: save, list, restore, start from one, delete", async () => {
+  const snap = { id: "snap_0123456789ab", name: "v1", size_bytes: 10, session_id: "sbx_1", created_at: 1, expires_at: 2 };
+  const server = fakeServer({
+    ...SESSION,
+    "POST /v1/sessions/sbx_1/snapshots": () => [201, snap],
+    "POST /v1/sessions/sbx_1/restore": ({ body }) => ({ restored: snap, path: body.path }),
+    "GET /v1/snapshots": () => ({ snapshots: [snap] }),
+    [`DELETE /v1/snapshots/${snap.id}`]: () => ({ deleted: snap }),
+  });
+  const sbx = await Sandbox.create(opts(server));
+  assert.deepEqual(await sbx.snapshot({ name: "v1" }), snap);
+  assert.deepEqual(server.calls.at(-1).body, { name: "v1", path: "." });
+  assert.deepEqual(await sbx.listSnapshots(), [snap]);
+  assert.equal((await sbx.restore(snap.id, { path: "old" })).path, "old");
+  await sbx.deleteSnapshot(snap.id);
+  await Sandbox.create(opts(server, { snapshot: snap.id }));
+  assert.equal(server.calls.at(-1).body.snapshot_id, snap.id);
 });

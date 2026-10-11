@@ -14,7 +14,7 @@ from tests.test_sdk import KEY, api_url, fresh_state  # noqa: F401  (pytest fixt
 
 OTHER_KEY = TENANT_KEYS["globex"]
 TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "activity",
-         "sandbox_info", "reset_sandbox"]
+         "save_snapshot", "list_snapshots", "restore_snapshot", "sandbox_info", "reset_sandbox"]
 
 
 def call(url, steps, key=KEY, query=""):
@@ -127,3 +127,23 @@ def test_reset_starts_a_fresh_sandbox(api_url):
         return first, set(server.active_sessions)
     first, after = call(api_url, steps)
     assert len(after) == 1 and first.isdisjoint(after)
+
+
+def test_snapshot_tools(api_url, monkeypatch, tmp_path):
+    from src.api.snapshots import SnapshotStore, _DirBackend
+
+    monkeypatch.setattr(server, "SNAPSHOTS", SnapshotStore(_DirBackend(str(tmp_path))))
+
+    async def steps(c):
+        await c.call_tool("write_file", {"path": "a.py", "content": "print(1)"})
+        saved = text(await c.call_tool("save_snapshot", {"name": "first"}))
+        snap_id = saved.split()[2]
+        listed = text(await c.call_tool("list_snapshots", {}))
+        restored = text(await c.call_tool("restore_snapshot", {"snapshot_id": snap_id, "path": "old"}))
+        bad = await c.call_tool("restore_snapshot", {"snapshot_id": "snap_000000000000"})
+        return saved, listed, restored, text(await c.call_tool("read_file", {"path": "old/a.py"})), bad
+
+    saved, listed, restored, content, bad = call(api_url, steps)
+    assert saved.startswith("Saved snapshot snap_") and "first" in listed
+    assert "into old" in restored and content == "print(1)"
+    assert bad.is_error and "not found" in text(bad)

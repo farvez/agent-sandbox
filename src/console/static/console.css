@@ -120,9 +120,12 @@ td.actions { display: flex; gap: 8px; justify-content: flex-end; align-items: ce
 .heading-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .heading-row p { margin-bottom: 2px; }
 .title-code { font-size: 1.3rem; background: none; padding: 0; }
-details.import { margin-top: 20px; padding: 12px 18px; }
-details.import summary { cursor: pointer; font-weight: 600; }
-details.import form.inline { margin: 12px 0 6px; }
+details.import, details.files, details.snapshot { margin-top: 20px; padding: 12px 18px; }
+details.import summary, details.files summary, details.snapshot summary { cursor: pointer; font-weight: 600; }
+details.import form.inline, details.files form.inline, details.snapshot form.inline { margin: 12px 0 6px; }
+details.files form.inline .check { align-items: center; font-weight: 400; }
+details.files form.inline .check input { margin-top: 0; }
+input[type=file] { padding: 5px; }
 
 .terminal { margin-top: 20px; border-radius: 10px; overflow: hidden; border: 1px solid #22302b;
             background: #0d1311; color: #d7e2dd; --term-muted: #8a9a93; }

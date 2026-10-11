@@ -32,6 +32,14 @@ commands count toward usage like API calls.
   download first; on 404 it asks GitHub for an installation token **limited to that one
   repository, read-only, valid for an hour**, downloads through the API, and drops the token.
   Only installations the tenant connected, on the repository's owner, are ever used.
+- **Files:** *Upload and download files* on a workspace page uploads files (one request each,
+  default 50 MB) into the terminal's current folder, and downloads a file or a folder as
+  `.tar.gz`. Host-side reads and writes open with `O_NOFOLLOW` and re-check the opened file's
+  real path, so a symlink the sandbox planted is never followed out of the workspace; folder
+  archives are built inside the sandbox.
+- **Snapshots:** *Save a snapshot* archives `/workspace` (inside the sandbox) to S3; the
+  Workspaces page lists them with **Start** (a new workspace with those files) and **Delete**.
+  Each tenant keeps up to 10, for 30 days (`snapshot_limit`, `snapshot_retention_days`).
 - **Terminal safety:** commands go through the same exec path as the API (gVisor, limits,
   metering); output is inserted as text, never HTML; requests carry the CSRF token in a header.
 

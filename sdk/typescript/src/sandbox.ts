@@ -1,5 +1,5 @@
 import { CommandError, FileNotFoundError, SandboxError } from "./errors.js";
-import { HttpClient } from "./http.js";
+import { HttpClient, type RequestOptions } from "./http.js";
 import { VERSION } from "./version.js";
 
 export const DEFAULT_TEMPLATE = "sandbox-base:latest";
@@ -23,6 +23,8 @@ export interface SandboxOptions {
   maxRetries?: number;
   /** Custom fetch (tests, proxies). */
   fetch?: typeof fetch;
+  /** Id of a saved snapshot to restore into the new session's /workspace. */
+  snapshot?: string;
 }
 
 export interface RunOptions {
@@ -83,6 +85,35 @@ export class Files {
     if (data.content === `Error: File '${path}' does not exist.`) throw new FileNotFoundError(`File not found: ${path}`);
     return data.content;
   }
+
+  /** Writes any bytes (a string is encoded as UTF-8) to `path`, creating folders. Returns the size. */
+  async upload(path: string, data: Uint8Array | string): Promise<number> {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    const result = await this.sandbox.call<{ size_bytes: number }>("PUT", `/files?${new URLSearchParams({ path })}`,
+      undefined, { data: bytes, timeoutMs: this.sandbox.longTimeoutMs(300_000) });
+    return result.size_bytes;
+  }
+
+  /** Returns a file's raw bytes. Throws NotFoundError if it doesn't exist. */
+  async download(path: string): Promise<Uint8Array> {
+    return this.sandbox.call<Uint8Array>("GET", `/files?${new URLSearchParams({ path })}`, undefined,
+      { raw: true, timeoutMs: this.sandbox.longTimeoutMs(300_000) });
+  }
+
+  /** A folder (default: the whole workspace) as .tar.gz bytes. */
+  async downloadArchive(path = "."): Promise<Uint8Array> {
+    return this.sandbox.call<Uint8Array>("GET", `/archive?${new URLSearchParams({ path })}`, undefined,
+      { raw: true, timeoutMs: this.sandbox.longTimeoutMs(300_000) });
+  }
+}
+
+export interface Snapshot {
+  id: string;
+  name: string;
+  size_bytes: number;
+  session_id: string | null;
+  created_at: number;
+  expires_at: number;
 }
 
 export interface ImportResult {
@@ -97,7 +128,7 @@ export interface AuditEntry {
   ts: number;
   session_id: string;
   actor: string;
-  kind: "exec" | "import";
+  kind: "exec" | "import" | "upload" | "download" | "snapshot" | "restore";
   command: string;
   exit_code: number | null;
   duration_s: number | null;
@@ -122,6 +153,7 @@ export class Sandbox {
   tenantId?: string;
   egress: string[] = [];
   diskQuotaMb?: number;
+  readonly snapshotId?: string;
   private readonly http: HttpClient;
 
   constructor(options: SandboxOptions = {}) {
@@ -137,6 +169,7 @@ export class Sandbox {
     });
     this.template = options.template ?? DEFAULT_TEMPLATE;
     this.requestedEgress = [...(options.egress ?? [])];
+    this.snapshotId = options.snapshot;
   }
 
   /** Creates and starts a sandbox. Remember to close() it, or use `await using`. */
@@ -159,7 +192,10 @@ export class Sandbox {
 
   async start(): Promise<this> {
     if (this.sessionId) return this;
-    const data = await this.http.request("POST", "/v1/sessions", { template: this.template, egress: this.requestedEgress });
+    const body: Record<string, unknown> = { template: this.template, egress: this.requestedEgress };
+    if (this.snapshotId) body.snapshot_id = this.snapshotId;
+    const data = await this.http.request("POST", "/v1/sessions", body,
+      this.snapshotId ? { timeoutMs: this.longTimeoutMs(240_000) } : {});
     this.sessionId = data.session_id;
     this.tenantId = data.tenant_id;
     this.egress = data.egress ?? [];
@@ -203,6 +239,29 @@ export class Sandbox {
     return (await this.call<{ events: Record<string, unknown>[] }>("GET", `/egress?limit=${Math.trunc(limit)}`)).events;
   }
 
+  // ------------------------------------------------------------------ snapshots
+
+  /** Saves /workspace (or one folder) as a snapshot that outlives this session. */
+  async snapshot(options: { name?: string; path?: string } = {}): Promise<Snapshot> {
+    return this.call<Snapshot>("POST", "/snapshots", { name: options.name ?? null, path: options.path ?? "." },
+      { timeoutMs: this.longTimeoutMs(240_000) });
+  }
+
+  /** Unpacks a snapshot into /workspace/<path>; files with the same names are replaced. */
+  async restore(snapshotId: string, options: { path?: string } = {}): Promise<{ restored: Snapshot; path: string }> {
+    return this.call("POST", "/restore", { snapshot_id: snapshotId, path: options.path ?? "." },
+      { timeoutMs: this.longTimeoutMs(240_000) });
+  }
+
+  /** This tenant's snapshots, newest first. */
+  async listSnapshots(): Promise<Snapshot[]> {
+    return (await this.http.request<{ snapshots: Snapshot[] }>("GET", "/v1/snapshots")).snapshots;
+  }
+
+  async deleteSnapshot(snapshotId: string): Promise<void> {
+    await this.http.request("DELETE", `/v1/snapshots/${encodeURIComponent(snapshotId)}`);
+  }
+
   // ------------------------------------------------------------------ account
 
   /** This tenant's limits and current usage. */
@@ -229,7 +288,12 @@ export class Sandbox {
   // ------------------------------------------------------------------ internals
 
   /** @internal */
-  async call<T = any>(method: string, suffix: string, body?: unknown, options?: { timeoutMs?: number }): Promise<T> {
+  longTimeoutMs(minimum: number): number {
+    return Math.max(this.http.timeoutMs, minimum);
+  }
+
+  /** @internal */
+  async call<T = any>(method: string, suffix: string, body?: unknown, options?: RequestOptions): Promise<T> {
     if (!this.sessionId) throw new SandboxError("Sandbox not started: use `await Sandbox.create(...)` or call start().");
     return this.http.request<T>(method, `/v1/sessions/${this.sessionId}${suffix}`, body, options);
   }

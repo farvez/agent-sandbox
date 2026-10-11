@@ -280,6 +280,30 @@ class RemoteMcp:
                 lines.append(f"{result:13} {e.get('command', '')}" + (f"   [{e['session_id']}]" if e.get("session_id") else ""))
             return "\n".join(lines)
 
+        @server.tool(annotations=ToolAnnotations(title="Save a snapshot", destructive_hint=False))
+        async def save_snapshot(name: str = "", path: str = ".", ctx: Context = None) -> str:
+            """Save the sandbox workspace (or one folder of it) as a snapshot that outlives the sandbox.
+
+            Restore it later with restore_snapshot, even in a new sandbox. Snapshots expire after
+            a retention period and each account keeps a limited number (see list_snapshots).
+            """
+            m = await self._call(ctx, lambda t, s, a: ops.snapshot(t, s, name or None, path or ".", a))
+            return f"Saved snapshot {m['id']} ({m['name']}, {m['size_bytes'] / 2**20:.1f} MB)."
+
+        @server.tool(annotations=ToolAnnotations(title="List snapshots", read_only_hint=True))
+        async def list_snapshots(ctx: Context = None) -> str:
+            """List this account's saved workspace snapshots, newest first."""
+            snaps = await self._call(ctx, lambda t, s, a: ops.snapshots(t))
+            if not snaps:
+                return "No snapshots yet. Save one with save_snapshot."
+            return "\n".join(f"{m['id']}  {m['size_bytes'] / 2**20:7.1f} MB  {m['name']}" for m in snaps)
+
+        @server.tool(annotations=ToolAnnotations(title="Restore a snapshot", destructive_hint=True))
+        async def restore_snapshot(snapshot_id: str, path: str = ".", ctx: Context = None) -> str:
+            """Unpack a saved snapshot into the sandbox workspace (or a folder of it). Files with the same names are replaced."""
+            r = await self._call(ctx, lambda t, s, a: ops.restore(t, s, snapshot_id, path or ".", a))
+            return f"Restored {r['restored']['id']} ({r['restored']['name']}) into {r['path']}."
+
         @server.tool(annotations=ToolAnnotations(title="Sandbox info", read_only_hint=True))
         async def sandbox_info(ctx: Context = None) -> str:
             """Show the sandbox's session, internet access, disk quota and the tenant's limits."""

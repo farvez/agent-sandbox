@@ -88,4 +88,38 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
   <p class="muted">No open workspaces.</p>
   {% endif %}
 </section>
+
+{% if snapshots_enabled %}
+<section>
+  <h2>Snapshots</h2>
+  {% if snapshots %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th class="hide-sm">Size</th><th class="hide-sm">Saved</th><th class="hide-sm">Deleted at</th><th></th></tr></thead>
+    <tbody>
+    {% for s in snapshots %}
+      <tr>
+        <td>{{ s.name }} <span class="muted small"><code>{{ s.id }}</code></span></td>
+        <td class="hide-sm">{{ '%.1f' | format(s.size_bytes / 1048576) }} MB</td>
+        <td class="hide-sm"><time data-ts="{{ s.created_at }}">{{ s.created_at | int }}</time></td>
+        <td class="hide-sm"><time data-ts="{{ s.expires_at }}">{{ s.expires_at | int }}</time></td>
+        <td class="actions">
+          <form method="post" action="/console/snapshots/{{ s.id }}/start">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            {% if egress %}<input type="hidden" name="internet" value="1">{% endif %}
+            <button class="button primary" type="submit" data-busy="Starting…" title="Start a new workspace with these files">Start</button>
+          </form>
+          <form method="post" action="/console/snapshots/{{ s.id }}/delete" data-confirm="Delete snapshot “{{ s.name }}”? This can't be undone.">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button class="button danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No snapshots. Save one from an open workspace to keep its files after it closes.</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

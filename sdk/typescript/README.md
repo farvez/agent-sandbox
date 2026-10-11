@@ -52,6 +52,20 @@ processes don't.
 await sbx.files.write("src/main.py", "print('hi')");
 await sbx.files.read("src/main.py");                 // throws FileNotFoundError if missing
 await sbx.importRepo("psf/requests", { ref: "v2.32.3", path: "lib" });   // public GitHub repos
+
+await sbx.files.upload("data/input.bin", bytes);     // Uint8Array or string, up to 50 MB
+const report = await sbx.files.download("out/report.csv");            // Uint8Array
+const archive = await sbx.files.downloadArchive("out");               // a folder as .tar.gz bytes
+```
+
+## Snapshots
+
+```ts
+const snap = await sbx.snapshot({ name: "deps installed" });   // outlives the session
+await using next = await Sandbox.create({ snapshot: snap.id }); // starts with the snapshot's files
+await next.restore(snap.id, { path: "copy" });                  // or unpack into a running sandbox
+console.log(await sbx.listSnapshots());
+await sbx.deleteSnapshot(snap.id);
 ```
 
 ## Give an LLM agent a sandbox

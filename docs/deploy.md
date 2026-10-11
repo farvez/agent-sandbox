@@ -104,6 +104,12 @@ scripts/deploy.sh --yes    # no question
   Docker's address pool is widened to `10.210.0.0/16` in /24s (256 concurrent egress sessions).
 - **Audit log:** a DynamoDB table (`agent-sandbox-audit`, deletion protection on, TTL after
   `audit_retention_days`, default 90) holds each tenant's command history.
+- **Snapshots:** a private, encrypted S3 bucket (`agent-sandbox-snapshots-*`, TLS-only) holds
+  them under `snapshots/<tenant>/`; a lifecycle rule deletes them after `snapshot_retention_days`
+  (default 30). `snapshot_limit` (10) and `snapshot_max_mb` (200) cap each tenant.
+- **Runtime config:** settings added after launch (snapshots so far) live in the SSM parameter
+  `/agent-sandbox/runtime-config` (JSON of `SANDBOX_*` variables), which the API reads at
+  startup. Changing them is an in-place deploy; only boot-script changes replace the host.
 - **Operator emails:** new invite requests are published to the alerts SNS topic, so they reach
   `alert_email` alongside alarms.
 - Keys are also stored in Terraform state; keep state private.

@@ -7,6 +7,7 @@ import docker
 
 from src.egress.gateway import EgressGateway, EgressSession, get_gateway
 from src.egress.proxy import expand_rules
+from src.sandbox import files
 from src.sandbox.gvisor import GVisorSandboxRunner
 from src.sandbox.workspace_pool import QuotaExceededError, disk_usage, get_pool, quota_bytes_from_env
 
@@ -181,6 +182,67 @@ class SandboxedWorkspace:
             return f"Error: File '{path}' does not exist."
         with open(safe_path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def write_bytes(self, path: str, data: bytes) -> int:
+        """Binary-safe upload: never follows a symlink, stays within the disk quota."""
+        target = files.resolve(self.workspace_dir, path)
+        replaced = os.path.getsize(target) if os.path.isfile(target) and not os.path.islink(target) else 0
+        projected = self.disk_usage_bytes() - replaced + len(data)
+        if projected > self.quota_bytes:
+            raise QuotaExceededError(
+                f"Uploading {path} would use {projected / 2**20:.1f} MB of the workspace's "
+                f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files first."
+            )
+        return files.write_bytes(self.workspace_dir, path, data, owner=self.container_user)
+
+    def read_bytes(self, path: str, max_bytes: int) -> bytes:
+        """Binary-safe download of one regular file (symlinks are refused)."""
+        return files.read_bytes(self.workspace_dir, path, max_bytes)
+
+    def archive(self, path: str, max_bytes: int, timeout_seconds: int = 60) -> bytes:
+        """A .tar.gz of a folder (or the whole workspace with path "."), built inside the sandbox
+        so symlinks are archived as links and never followed on the host."""
+        rel = (path or ".").strip() or "."
+        if rel != ".":
+            target = files.resolve(self.workspace_dir, rel)
+            if not os.path.isdir(target):
+                raise files.WorkspaceFileError(f"'{rel}' is not a folder.", 404 if not os.path.exists(target) else 400)
+            rel = os.path.relpath(target, self.workspace_dir).replace(os.sep, "/")
+        name = f".airlock-archive-{uuid.uuid4().hex[:12]}.tar.gz"
+        quoted = "'" + rel.replace("'", "'\\''") + "'"
+        # Written straight into the workspace (/tmp is a small tmpfs); excluded from itself.
+        command = f"tar -czf /workspace/{name} --exclude={name} -C /workspace -- {quoted}"
+        try:
+            result = self.execute(command, timeout_seconds)
+            if result["timed_out"] or result["exit_code"] != 0:
+                detail = (result["stderr"] or "").strip()[-300:] or "the archive couldn't be built"
+                raise files.WorkspaceFileError(f"Archiving failed: {detail}", 400)
+            return files.read_root_file(self.workspace_dir, name, max_bytes)
+        finally:
+            files.remove_quietly(os.path.join(self.workspace_dir, name))
+
+    def extract(self, archive: bytes, dest: str = ".", timeout_seconds: int = 60) -> None:
+        """Unpacks a .tar.gz into the workspace, inside the sandbox (the host never interprets it)."""
+        rel = (dest or ".").strip() or "."
+        if rel != ".":
+            rel = os.path.relpath(files.resolve(self.workspace_dir, rel), self.workspace_dir).replace(os.sep, "/")
+        projected = self.disk_usage_bytes() + len(archive)
+        if projected > self.quota_bytes:
+            raise QuotaExceededError("Not enough room in the workspace's disk quota for this archive.")
+        name = f".airlock-restore-{uuid.uuid4().hex[:12]}.tar.gz"
+        path = files.create_new(self.workspace_dir, name, archive, owner=self.container_user)
+        quoted = "'" + rel.replace("'", "'\\''") + "'"
+        command = (
+            f"trap 'rm -f /workspace/{name}' EXIT; mkdir -p -- {quoted} && "
+            f"tar -xzf /workspace/{name} -C {quoted} --no-same-owner --no-same-permissions"
+        )
+        try:
+            result = self.execute(command, timeout_seconds)
+            if result["timed_out"] or result["exit_code"] != 0:
+                detail = (result["stderr"] or "").strip()[-300:] or "the archive couldn't be unpacked"
+                raise files.WorkspaceFileError(f"Restoring failed: {detail}", 400)
+        finally:
+            files.remove_quietly(path)
 
     def run_command(self, command: str, timeout_seconds: int = 15) -> str:
         """Executes a command and returns the result as text (the agent tools' format)."""

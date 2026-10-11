@@ -54,6 +54,39 @@ class FakeWorkspace:
     def read_file(self, path):
         return self._ws.read_file(path)
 
+    def write_bytes(self, path, data):
+        return self._ws.write_bytes(path, data)
+
+    def read_bytes(self, path, max_bytes):
+        return self._ws.read_bytes(path, max_bytes)
+
+    def archive(self, path, max_bytes):
+        # The real one runs tar inside the sandbox; host-side tarfile is fine for a fake.
+        import io
+        import tarfile
+
+        from src.sandbox import files
+        root = self.workspace_dir if path in ("", ".") else files.resolve(self.workspace_dir, path)
+        if not os.path.isdir(root):
+            raise files.WorkspaceFileError(f"'{path}' is not a folder.", 404)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            # Like `tar -C /workspace <path>`: members keep the folder's name.
+            tar.add(root, arcname="." if path in ("", ".") else os.path.relpath(root, self.workspace_dir))
+        if len(buf.getvalue()) > max_bytes:
+            raise files.WorkspaceFileError("too large", 413)
+        return buf.getvalue()
+
+    def extract(self, archive, dest="."):
+        import io
+        import tarfile
+
+        from src.sandbox import files
+        target = self.workspace_dir if dest in ("", ".") else files.resolve(self.workspace_dir, dest)
+        os.makedirs(target, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            tar.extractall(target, filter="data")
+
     def execute(self, command, timeout_seconds=15):
         time.sleep(self.exec_delay)
         return {"stdout": f"ran {command}\n", "stderr": "", "exit_code": 0,

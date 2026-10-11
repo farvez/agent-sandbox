@@ -2,6 +2,13 @@
 
 All notable changes to `airlock-sandbox` on npm, the TypeScript SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.2.0 — 2026-10-11
+
+- Binary files: `sbx.files.upload(path, data)` (`Uint8Array` or string), `sbx.files.download(path)`
+  and `sbx.files.downloadArchive(path = ".")` (a folder as `.tar.gz` bytes).
+- Snapshots: `sbx.snapshot({ name, path })`, `sbx.restore(id, { path })`, `sbx.listSnapshots()`,
+  `sbx.deleteSnapshot(id)`, and `Sandbox.create({ snapshot: id })`.
+
 ## 0.1.0 — 2026-10-08
 
 - First release: `Sandbox` (`create`, `attach`, `start`, `close`, `await using`), `run()` returning

@@ -1,4 +1,4 @@
-"""Python SDK for agent-sandbox: isolated, network-controlled code execution for AI agents.
+﻿"""Python SDK for agent-sandbox: isolated, network-controlled code execution for AI agents.
 
     from airlock_sandbox import Sandbox
 
@@ -21,7 +21,7 @@ from airlock_sandbox.errors import (
 )
 from airlock_sandbox.sandbox import CommandResult, Files, Sandbox
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "Sandbox",

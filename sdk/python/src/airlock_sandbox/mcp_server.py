@@ -281,6 +281,42 @@ def build_server(holder: SandboxHolder) -> MCPServer:
 
         return await run(fetch)
 
+    @server.tool(annotations=ToolAnnotations(title="Save a snapshot", destructive_hint=False))
+    async def save_snapshot(name: str = "", path: str = ".") -> str:
+        """Save the sandbox workspace (or one folder of it) as a snapshot that outlives the sandbox.
+
+        Restore it later with restore_snapshot, even in a new sandbox. Snapshots expire after
+        a retention period and each account keeps a limited number (see list_snapshots).
+        """
+
+        def save(sbx: Sandbox) -> str:
+            m = sbx.snapshot(name or None, path or ".")
+            return f"Saved snapshot {m['id']} ({m['name']}, {m['size_bytes'] / 2**20:.1f} MB)."
+
+        return await run(save)
+
+    @server.tool(annotations=ToolAnnotations(title="List snapshots", read_only_hint=True))
+    async def list_snapshots() -> str:
+        """List this account's saved workspace snapshots, newest first."""
+
+        def fetch(sbx: Sandbox) -> str:
+            snaps = sbx.list_snapshots()
+            if not snaps:
+                return "No snapshots yet. Save one with save_snapshot."
+            return "\n".join(f"{m['id']}  {m['size_bytes'] / 2**20:7.1f} MB  {m['name']}" for m in snaps)
+
+        return await run(fetch)
+
+    @server.tool(annotations=ToolAnnotations(title="Restore a snapshot", destructive_hint=True))
+    async def restore_snapshot(snapshot_id: str, path: str = ".") -> str:
+        """Unpack a saved snapshot into the sandbox workspace (or a folder of it). Files with the same names are replaced."""
+
+        def restore(sbx: Sandbox) -> str:
+            r = sbx.restore(snapshot_id, path or ".")
+            return f"Restored {r['restored']['id']} ({r['restored']['name']}) into {r['path']}."
+
+        return await run(restore)
+
     @server.tool(annotations=ToolAnnotations(title="Sandbox info", read_only_hint=True))
     async def sandbox_info() -> str:
         """Show the sandbox's session, internet access, disk quota and the tenant's limits."""

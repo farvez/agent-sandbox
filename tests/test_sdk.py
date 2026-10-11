@@ -444,3 +444,37 @@ def test_audit_returns_this_tenants_history(sbx, monkeypatch, tmp_path):
     assert [e["command"] for e in page["entries"]] == ["fail now"] and page["entries"][0]["exit_code"] == 3
     older = sbx.audit(limit=5, before=page["next"])
     assert [e["command"] for e in older["entries"]] == ["echo one"] and older["next"] is None
+
+
+# ---------------------------------------------------------------- files and snapshots
+
+
+def test_upload_download_and_archive(sbx):
+    import io
+    import tarfile
+
+    data = bytes(range(256))
+    assert sbx.files.upload("bin/data.bin", data) == 256
+    assert sbx.files.download("bin/data.bin") == data
+    assert sbx.files.upload("t.txt", "héllo") == len("héllo".encode())
+    with tarfile.open(fileobj=io.BytesIO(sbx.files.download_archive("bin")), mode="r:gz") as tar:
+        assert tar.extractfile("bin/data.bin").read() == data
+    with pytest.raises(NotFoundError):
+        sbx.files.download("missing.bin")
+
+
+def test_snapshots_round_trip(api_url, monkeypatch, tmp_path):
+    from src.api.snapshots import SnapshotStore, _DirBackend
+
+    monkeypatch.setattr(server, "SNAPSHOTS", SnapshotStore(_DirBackend(str(tmp_path))))
+    with Sandbox(api_key=KEY, base_url=api_url) as s:
+        s.files.upload("app/main.py", b"print(1)")
+        snap = s.snapshot("v1")
+        assert snap["name"] == "v1"
+    assert [x["id"] for x in s.list_snapshots()] == [snap["id"]]
+    with Sandbox(api_key=KEY, base_url=api_url, snapshot=snap["id"]) as s2:
+        assert s2.files.download("app/main.py") == b"print(1)"
+        s2.restore(snap["id"], path="copy")
+        assert s2.files.read("copy/app/main.py") == "print(1)"
+    s2.delete_snapshot(snap["id"])
+    assert s2.list_snapshots() == []

@@ -9,8 +9,13 @@ import logging
 from typing import Dict, List, Optional, Set, Tuple
 from contextlib import AsyncExitStack, asynccontextmanager
 
+from src.api import runtime_config
+
+runtime_config.apply()  # before anything below reads its settings from the environment
+
 from fastapi import FastAPI, HTTPException, Request, Security, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -24,6 +29,8 @@ from src.api import session_state
 from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.api.repos import RepoImportError, clean_destination, fetch_archive, import_archive, parse_repo
+from src.api.snapshots import SnapshotError, SnapshotStore
+from src.sandbox.files import WorkspaceFileError
 from src.sandbox.workspace import SandboxedWorkspace, format_result
 from src.sandbox.workspace_pool import QuotaExceededError, WorkspaceCapacityError, get_pool
 
@@ -112,6 +119,12 @@ AUDIT = AuditLog.from_config(os.getenv("SANDBOX_AUDIT"), region=os.getenv("AWS_R
                              retention_days=int(os.getenv("SANDBOX_AUDIT_RETENTION_DAYS", "90")))
 
 
+# Workspace snapshots (optional; see src/api/snapshots.py) and file transfer limits.
+SNAPSHOTS = SnapshotStore.from_config(os.getenv("SANDBOX_SNAPSHOTS"), region=os.getenv("AWS_REGION"))
+UPLOAD_MAX_BYTES = int(os.getenv("SANDBOX_UPLOAD_MAX_MB", "50")) * 2**20
+DOWNLOAD_MAX_BYTES = int(os.getenv("SANDBOX_DOWNLOAD_MAX_MB", "100")) * 2**20
+
+
 # GitHub App for private repository import (optional; see src/api/github_app.py).
 GITHUB_APP = GitHubApp.from_env()
 
@@ -173,6 +186,8 @@ class CreateSessionRequest(BaseModel):
         max_length=20,
         description='Hosts or presets this session may reach over HTTPS, e.g. ["pypi"]. Empty = no network.',
     )
+    snapshot_id: Optional[str] = Field(default=None, max_length=40,
+                                       description="Start with this snapshot's files restored into /workspace")
 
 
 class CreateSessionResponse(BaseModel):
@@ -214,6 +229,16 @@ class ImportRepoRequest(BaseModel):
     repo: str = Field(..., max_length=300, description='Public GitHub repository: "owner/repo" or its https://github.com URL')
     ref: Optional[str] = Field(default=None, max_length=200, description="Branch, tag or commit (default: the default branch)")
     path: Optional[str] = Field(default=None, max_length=200, description="Folder inside /workspace (default: the repo name)")
+
+
+class CreateSnapshotRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=80, description="A label to recognise it by")
+    path: str = Field(default=".", max_length=200, description='Folder to save (default "." = all of /workspace)')
+
+
+class RestoreSnapshotRequest(BaseModel):
+    snapshot_id: str = Field(..., max_length=40)
+    path: str = Field(default=".", max_length=200, description="Folder inside /workspace to restore into")
 
 
 class SessionRecord:
@@ -491,6 +516,78 @@ def import_repo_into(rec: SessionRecord, repo: str, ref: Optional[str] = None, p
     return result
 
 
+def _transfer_error(e: Exception) -> HTTPException:
+    if isinstance(e, (WorkspaceFileError, SnapshotError)):
+        return HTTPException(status_code=e.status, detail=str(e))
+    if isinstance(e, QuotaExceededError):
+        return HTTPException(status_code=413, detail=str(e))
+    if isinstance(e, PermissionError):
+        return HTTPException(status_code=403, detail=str(e))
+    raise e
+
+
+def _audited(rec: SessionRecord, actor: str, kind: str, described: str, action):
+    """Runs a file or snapshot operation, recording it (and any failure) in the audit log."""
+    started = time.monotonic()
+    try:
+        result = action()
+    except (WorkspaceFileError, SnapshotError, QuotaExceededError, PermissionError) as e:
+        error = _transfer_error(e)
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind=kind, command=described,
+                     duration_s=round(time.monotonic() - started, 3), detail=f"failed ({error.status_code}): {e}"[:300])
+        raise error
+    record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind=kind, command=described,
+                 exit_code=0, duration_s=round(time.monotonic() - started, 3))
+    return result
+
+
+def upload_file(rec: SessionRecord, path: str, data: bytes, actor: str = "api") -> dict:
+    size = _audited(rec, actor, "upload", f"upload {path} ({len(data)} bytes)",
+                    lambda: rec.workspace.write_bytes(path, data))
+    return {"path": path, "size_bytes": size}
+
+
+def download_file(rec: SessionRecord, path: str, actor: str = "api") -> bytes:
+    return _audited(rec, actor, "download", f"download {path}",
+                    lambda: rec.workspace.read_bytes(path, DOWNLOAD_MAX_BYTES))
+
+
+def download_archive(rec: SessionRecord, path: str = ".", actor: str = "api") -> bytes:
+    def build():
+        with LIMITS.running_command(rec.tenant_id):
+            return rec.workspace.archive(path, DOWNLOAD_MAX_BYTES)
+    return _audited(rec, actor, "download", f"download archive of {path or '.'}", build)
+
+
+def require_snapshots() -> SnapshotStore:
+    if SNAPSHOTS is None:
+        raise HTTPException(status_code=501, detail="Snapshots are not enabled on this server (SANDBOX_SNAPSHOTS).")
+    return SNAPSHOTS
+
+
+def create_snapshot(rec: SessionRecord, name: Optional[str] = None, path: str = ".", actor: str = "api") -> dict:
+    store = require_snapshots()
+
+    def save():
+        with LIMITS.running_command(rec.tenant_id):
+            archive = rec.workspace.archive(path, store.max_bytes)
+        return store.create(rec.tenant_id, archive, name=name, session_id=rec.session_id)
+    meta = _audited(rec, actor, "snapshot", f"snapshot {path or '.'}" + (f" as {name!r}" if name else ""), save)
+    return meta
+
+
+def restore_snapshot(rec: SessionRecord, snapshot_id: str, path: str = ".", actor: str = "api") -> dict:
+    store = require_snapshots()
+
+    def restore():
+        meta, archive = store.get(rec.tenant_id, snapshot_id)
+        with LIMITS.running_command(rec.tenant_id):
+            rec.workspace.extract(archive, path)
+        return meta
+    meta = _audited(rec, actor, "restore", f"restore {snapshot_id} into {path or '.'}", restore)
+    return {"restored": meta, "path": path or "."}
+
+
 def end_session(session_id: str, tenant_id: str) -> None:
     with sessions_lock:
         rec = active_sessions.get(session_id)
@@ -531,8 +628,20 @@ def health_check():
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize)):
+def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize),
+                   header_key: Optional[str] = Security(api_key_header)):
+    if request.snapshot_id:
+        try:
+            require_snapshots().meta(tenant_id, request.snapshot_id)
+        except SnapshotError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
     rec = start_session(tenant_id, request.template, request.egress)
+    if request.snapshot_id:
+        try:
+            restore_snapshot(rec, request.snapshot_id, actor=actor_for_key(header_key))
+        except Exception:
+            end_session(rec.session_id, tenant_id)
+            raise
     return CreateSessionResponse(
         session_id=rec.session_id,
         tenant_id=tenant_id,
@@ -687,6 +796,80 @@ def import_repo(session_id: str, request: ImportRepoRequest, tenant_id: str = Se
     return import_repo_into(rec, request.repo, request.ref, request.path, actor=actor_for_key(header_key))
 
 
+@app.put("/v1/sessions/{session_id}/files")
+async def upload(session_id: str, path: str, request: Request, tenant_id: str = Security(authorize),
+                 header_key: Optional[str] = Security(api_key_header)):
+    """Uploads the raw request body (any bytes) to /workspace/<path>, creating folders as needed."""
+    rec = get_authorized_session(session_id, tenant_id)
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploads are limited to {UPLOAD_MAX_BYTES // 2**20} MB.")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"Uploads are limited to {UPLOAD_MAX_BYTES // 2**20} MB.")
+        chunks.append(chunk)
+    return await run_in_threadpool(upload_file, rec, path, b"".join(chunks), actor_for_key(header_key))
+
+
+def _attachment(data: bytes, filename: str, media_type: str) -> Response:
+    safe = "".join(c for c in filename if c.isalnum() or c in "._-") or "download"
+    return Response(content=data, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{safe}"',
+                             "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/v1/sessions/{session_id}/files")
+def download(session_id: str, path: str, tenant_id: str = Security(authorize),
+             header_key: Optional[str] = Security(api_key_header)):
+    """Downloads one file from /workspace as raw bytes."""
+    rec = get_authorized_session(session_id, tenant_id)
+    data = download_file(rec, path, actor=actor_for_key(header_key))
+    return _attachment(data, os.path.basename(path.rstrip("/")), "application/octet-stream")
+
+
+@app.get("/v1/sessions/{session_id}/archive")
+def download_folder(session_id: str, path: str = ".", tenant_id: str = Security(authorize),
+                    header_key: Optional[str] = Security(api_key_header)):
+    """Downloads a folder (default: the whole workspace) as a .tar.gz built inside the sandbox."""
+    rec = get_authorized_session(session_id, tenant_id)
+    data = download_archive(rec, path, actor=actor_for_key(header_key))
+    base = "workspace" if path.strip() in ("", ".") else os.path.basename(path.strip().rstrip("/"))
+    return _attachment(data, f"{base}.tar.gz", "application/gzip")
+
+
+@app.post("/v1/sessions/{session_id}/snapshots", status_code=status.HTTP_201_CREATED)
+def snapshot_session(session_id: str, request: CreateSnapshotRequest, tenant_id: str = Security(authorize),
+                     header_key: Optional[str] = Security(api_key_header)):
+    """Saves /workspace (or one folder of it) as a snapshot that outlives the session."""
+    rec = get_authorized_session(session_id, tenant_id)
+    return create_snapshot(rec, request.name, request.path, actor=actor_for_key(header_key))
+
+
+@app.post("/v1/sessions/{session_id}/restore")
+def restore_into_session(session_id: str, request: RestoreSnapshotRequest, tenant_id: str = Security(authorize),
+                         header_key: Optional[str] = Security(api_key_header)):
+    """Unpacks a snapshot into this session's workspace (existing files with the same names are replaced)."""
+    rec = get_authorized_session(session_id, tenant_id)
+    return restore_snapshot(rec, request.snapshot_id, request.path, actor=actor_for_key(header_key))
+
+
+@app.get("/v1/snapshots")
+def list_snapshots(tenant_id: str = Security(authorize)):
+    store = require_snapshots()
+    return {"tenant_id": tenant_id, "snapshots": store.list(tenant_id), "limit": store.limit,
+            "max_mb": store.max_bytes // 2**20, "retention_days": store.retention_days}
+
+
+@app.delete("/v1/snapshots/{snapshot_id}")
+def delete_snapshot(snapshot_id: str, tenant_id: str = Security(authorize)):
+    try:
+        return {"deleted": require_snapshots().delete(tenant_id, snapshot_id)}
+    except SnapshotError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
 @app.get("/v1/audit")
 def audit_log(limit: int = 100, before: Optional[str] = None, tenant_id: str = Security(authorize)):
     """This tenant's command history, newest first: commands and outcomes, never output.
@@ -761,6 +944,18 @@ class McpOps:
         return import_repo_into(get_authorized_session(session_id, tenant_id), repo, ref, path, actor=actor)
 
     @staticmethod
+    def snapshot(tenant_id: str, session_id: str, name: Optional[str], path: str, actor: str) -> dict:
+        return create_snapshot(get_authorized_session(session_id, tenant_id), name, path, actor=actor)
+
+    @staticmethod
+    def snapshots(tenant_id: str) -> List[dict]:
+        return require_snapshots().list(tenant_id)
+
+    @staticmethod
+    def restore(tenant_id: str, session_id: str, snapshot_id: str, path: str, actor: str) -> dict:
+        return restore_snapshot(get_authorized_session(session_id, tenant_id), snapshot_id, path, actor=actor)
+
+    @staticmethod
     def egress_events(tenant_id: str, session_id: str, limit: int) -> List[dict]:
         return get_authorized_session(session_id, tenant_id).workspace.egress_events(limit=limit)
 
@@ -786,7 +981,7 @@ class McpOps:
     def describe_error(e: Exception) -> str:
         if isinstance(e, HTTPException):
             return str(e.detail)
-        if isinstance(e, (LimitExceeded, PermissionError, QuotaExceededError)):
+        if isinstance(e, (LimitExceeded, PermissionError, QuotaExceededError, WorkspaceFileError, SnapshotError)):
             return str(e)
         logger.exception("MCP tool failed")
         return "The sandbox failed to run that; try again, or reset_sandbox."
@@ -837,6 +1032,55 @@ class ConsoleSessions:
     def destroy(self, tenant_id: str, session_id: str) -> None:
         LIMITS.check_rate(tenant_id)
         end_session(session_id, tenant_id)
+
+    # Files and snapshots. Errors come back as HTTPException (see _transfer_error).
+    @property
+    def upload_max_bytes(self) -> int:
+        return UPLOAD_MAX_BYTES
+
+    @property
+    def snapshots_enabled(self) -> bool:
+        return SNAPSHOTS is not None
+
+    def upload(self, tenant_id: str, session_id: str, path: str, data: bytes, actor: str = "console") -> dict:
+        LIMITS.check_rate(tenant_id)
+        return upload_file(get_authorized_session(session_id, tenant_id), path, data, actor=actor)
+
+    def download(self, tenant_id: str, session_id: str, path: str, actor: str = "console") -> bytes:
+        LIMITS.check_rate(tenant_id)
+        return download_file(get_authorized_session(session_id, tenant_id), path, actor=actor)
+
+    def download_archive(self, tenant_id: str, session_id: str, path: str, actor: str = "console") -> bytes:
+        LIMITS.check_rate(tenant_id)
+        return download_archive(get_authorized_session(session_id, tenant_id), path, actor=actor)
+
+    def snapshot(self, tenant_id: str, session_id: str, name: Optional[str], actor: str = "console") -> dict:
+        LIMITS.check_rate(tenant_id)
+        return create_snapshot(get_authorized_session(session_id, tenant_id), name, ".", actor=actor)
+
+    def snapshots(self, tenant_id: str) -> List[dict]:
+        return SNAPSHOTS.list(tenant_id) if SNAPSHOTS is not None else []
+
+    def create_from_snapshot(self, tenant_id: str, egress: List[str], snapshot_id: str, actor: str = "console") -> dict:
+        LIMITS.check_rate(tenant_id)
+        try:
+            require_snapshots().meta(tenant_id, snapshot_id)
+        except SnapshotError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+        rec = start_session(tenant_id, egress_request=egress)
+        try:
+            restore_snapshot(rec, snapshot_id, actor=actor)
+        except Exception:
+            end_session(rec.session_id, tenant_id)
+            raise
+        return rec.summary()
+
+    def delete_snapshot(self, tenant_id: str, snapshot_id: str) -> dict:
+        LIMITS.check_rate(tenant_id)
+        try:
+            return require_snapshots().delete(tenant_id, snapshot_id)
+        except SnapshotError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
 
     def close_all(self, tenant_id: str) -> int:
         return close_tenant_sessions(tenant_id)

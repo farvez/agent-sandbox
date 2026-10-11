@@ -104,6 +104,23 @@ class Files:
             raise FileNotFoundError(path)
         return content
 
+    def upload(self, path: str, data: Union[bytes, str]) -> int:
+        """Writes any bytes (str is encoded as UTF-8) to `path`, creating folders. Returns the size."""
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        query = urllib.parse.urlencode({"path": path})
+        return self._sandbox._call("PUT", f"/files?{query}", data=data, timeout=max(self._sandbox._http.timeout, 300))["size_bytes"]
+
+    def download(self, path: str) -> bytes:
+        """Returns a file's raw bytes. Raises NotFoundError if it doesn't exist."""
+        query = urllib.parse.urlencode({"path": path})
+        return self._sandbox._call("GET", f"/files?{query}", raw=True, timeout=max(self._sandbox._http.timeout, 300))
+
+    def download_archive(self, path: str = ".") -> bytes:
+        """A folder (default: the whole workspace) as .tar.gz bytes."""
+        query = urllib.parse.urlencode({"path": path})
+        return self._sandbox._call("GET", f"/archive?{query}", raw=True, timeout=max(self._sandbox._http.timeout, 300))
+
 
 def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
@@ -130,6 +147,7 @@ class Sandbox:
         timeout: seconds to wait for each HTTP response.
         max_retries: retries for rate limits (429), full servers (503) and
             dropped connections on idempotent calls.
+        snapshot: id of a saved snapshot to restore into the new session's /workspace.
     """
 
     def __init__(
@@ -142,6 +160,7 @@ class Sandbox:
         verify: Optional[Union[bool, str]] = None,
         timeout: float = 90,
         max_retries: int = 3,
+        snapshot: Optional[str] = None,
     ):
         base_url = base_url or os.getenv("SANDBOX_API_URL")
         api_key = api_key or os.getenv("SANDBOX_API_KEY")
@@ -156,6 +175,7 @@ class Sandbox:
                                 user_agent=f"airlock-sandbox/{__version__}")
         self.template = template
         self.requested_egress = list(egress or [])
+        self.snapshot_id = snapshot
         self.files = Files(self)
         self.session_id: Optional[str] = None
         self.tenant_id: Optional[str] = None
@@ -179,7 +199,11 @@ class Sandbox:
     def start(self) -> "Sandbox":
         if self.session_id:
             return self
-        data = self._http.request("POST", "/v1/sessions", {"template": self.template, "egress": self.requested_egress})
+        body = {"template": self.template, "egress": self.requested_egress}
+        if self.snapshot_id:
+            body["snapshot_id"] = self.snapshot_id
+        data = self._http.request("POST", "/v1/sessions", body,
+                                  timeout=max(self._http.timeout, 240) if self.snapshot_id else None)
         self.session_id = data["session_id"]
         self.tenant_id = data.get("tenant_id")
         self.egress = data.get("egress", [])
@@ -237,6 +261,26 @@ class Sandbox:
         """Every outbound connection this session attempted, allowed or denied."""
         return self._call("GET", f"/egress?limit={int(limit)}")["events"]
 
+    def snapshot(self, name: Optional[str] = None, path: str = ".") -> dict:
+        """Saves /workspace (or one folder) as a snapshot that outlives this session.
+
+        Returns {"id", "name", "size_bytes", "session_id", "created_at", "expires_at"}; start a
+        new sandbox from it with Sandbox(snapshot=id) or restore() it into this one.
+        """
+        return self._call("POST", "/snapshots", {"name": name, "path": path}, timeout=max(self._http.timeout, 240))
+
+    def restore(self, snapshot_id: str, path: str = ".") -> dict:
+        """Unpacks a snapshot into /workspace/<path>; files with the same names are replaced."""
+        return self._call("POST", "/restore", {"snapshot_id": snapshot_id, "path": path},
+                          timeout=max(self._http.timeout, 240))
+
+    def list_snapshots(self) -> List[dict]:
+        """This tenant's snapshots, newest first."""
+        return self._http.request("GET", "/v1/snapshots")["snapshots"]
+
+    def delete_snapshot(self, snapshot_id: str) -> None:
+        self._http.request("DELETE", f"/v1/snapshots/{urllib.parse.quote(snapshot_id, safe='')}")
+
     # ------------------------------------------------------------------ account
 
     def usage(self) -> dict:
@@ -274,7 +318,9 @@ class Sandbox:
 
     # ------------------------------------------------------------------ internals
 
-    def _call(self, method: str, suffix: str, body: Optional[dict] = None, timeout: Optional[float] = None):
+    def _call(self, method: str, suffix: str, body: Optional[dict] = None, timeout: Optional[float] = None,
+              data: Optional[bytes] = None, raw: bool = False):
         if not self.session_id:
             raise SandboxError("Sandbox not started: use `with Sandbox(...)` or call start().")
-        return self._http.request(method, f"/v1/sessions/{self.session_id}{suffix}", body, timeout=timeout)
+        return self._http.request(method, f"/v1/sessions/{self.session_id}{suffix}", body, timeout=timeout,
+                                  data=data, raw=raw)

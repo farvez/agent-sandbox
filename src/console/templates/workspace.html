@@ -29,6 +29,34 @@
     Downloaded by the server and unpacked inside the sandbox; no internet access needed.</p>
 </details>
 
+<details class="card files">
+  <summary>Upload and download files</summary>
+  <form class="inline" id="upload-form" autocomplete="off">
+    <input type="file" name="files" multiple required aria-label="Files to upload">
+    <input name="folder" maxlength="200" placeholder="folder (default: current)" spellcheck="false" aria-label="Folder inside /workspace">
+    <button class="button primary" type="submit">Upload</button>
+  </form>
+  <p class="muted small">Up to {{ upload_max_mb }} MB per file, within the workspace's {{ workspace.disk_quota_mb }} MB disk.</p>
+  <form class="inline" method="get" action="/console/workspaces/{{ workspace.session_id }}/download">
+    <input name="path" required maxlength="300" placeholder="path, e.g. results/report.csv or ." spellcheck="false" aria-label="Path inside /workspace">
+    <label class="check"><input type="checkbox" name="folder" value="1"> <span>folder as .tar.gz</span></label>
+    <button class="button" type="submit">Download</button>
+  </form>
+</details>
+
+{% if snapshots_enabled %}
+<details class="card snapshot">
+  <summary>Save a snapshot</summary>
+  <form class="inline" method="post" action="/console/workspaces/{{ workspace.session_id }}/snapshot">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <input name="name" maxlength="80" placeholder="name (optional)" aria-label="Snapshot name">
+    <button class="button primary" type="submit" data-busy="Saving…">Save snapshot</button>
+  </form>
+  <p class="muted small">Saves all of /workspace (including installed packages under <code>.local</code>) so you can
+    start a new workspace from it later, after this one closes. Snapshots are kept for a limited time.</p>
+</details>
+{% endif %}
+
 <section class="terminal" id="terminal" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" data-home="{{ home }}" data-cwd="{{ start_cwd }}">
   <div class="term-output" id="term-output" role="log" aria-live="polite" tabindex="0">
     <div class="term-line muted">Each line runs as its own command in the sandbox (Python 3.11, bash). <code>cd</code> carries over; environment variables don't.

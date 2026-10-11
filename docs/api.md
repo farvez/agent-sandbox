@@ -8,12 +8,19 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | Method | Path | Body / query | Result |
 |--------|------|--------------|--------|
 | GET | `/healthz` | — | `{status, active_sessions}` |
-| POST | `/v1/sessions` | `{template?, metadata?, egress?}` | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
+| POST | `/v1/sessions` | `{template?, metadata?, egress?, snapshot_id?}` (a snapshot is restored into the new workspace) | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
 | GET | `/v1/sessions` | — | `{tenant_id, sessions: [{session_id, egress, created_at, last_accessed_at, expires_at, disk_quota_mb}]}` — this tenant's open sessions |
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
 | POST | `/v1/sessions/{id}/exec` | `{command, timeout_seconds (1–60)}` | `{command, stdout, stderr, exit_code, timed_out, oom_killed, warnings, output}` · `429` too many commands running |
 | POST | `/v1/sessions/{id}/import` | `{repo, ref?, path?}` | `{repo, ref, path, files, archive_bytes}` — GitHub repo unpacked into `/workspace/<path>`; public, or private through the tenant's connected GitHub App installation · `400` bad name · `404` not found/private · `409` folder exists · `413` too large · `422` unpack failed |
+| PUT | `/v1/sessions/{id}/files` | `?path=`, body: raw bytes | `{path, size_bytes}` — any file, folders created · `403` outside the workspace · `413` over 50 MB (`SANDBOX_UPLOAD_MAX_MB`) or the disk quota · `400` symlink or folder in the way |
+| GET | `/v1/sessions/{id}/files` | `?path=` | the file's raw bytes (`application/octet-stream`) · `404` missing · `413` over 100 MB (`SANDBOX_DOWNLOAD_MAX_MB`) · symlinks are never followed |
+| GET | `/v1/sessions/{id}/archive` | `?path=` (default `.`) | a folder as `.tar.gz` (`application/gzip`), built inside the sandbox; symlinks stored as links |
+| POST | `/v1/sessions/{id}/snapshots` | `{name?, path?}` | `201 {id, name, size_bytes, session_id, created_at, expires_at}` — saves `/workspace` (or a folder) beyond the session · `409` at the snapshot limit · `413` too large · `501` when disabled |
+| POST | `/v1/sessions/{id}/restore` | `{snapshot_id, path?}` | `{restored, path}` — unpacks a snapshot into `/workspace/<path>` · `404` unknown snapshot |
+| GET | `/v1/snapshots` | — | `{tenant_id, snapshots, limit, max_mb, retention_days}` — newest first |
+| DELETE | `/v1/snapshots/{snapshot_id}` | — | `{deleted}` · `404` |
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
 | GET | `/v1/egress/policy` | — | `{tenant_id, allowed}` — hosts this tenant may request |
@@ -98,6 +105,10 @@ the client) shows a tenant its limits and current usage; client errors carry
 | `SANDBOX_GITHUB_APP_ID`, `_SLUG`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY` | unset | All five enable private repository import through a GitHub App |
 | `SANDBOX_AUDIT` | unset | `dynamodb:<table>` (key `tenant` + sort key `sk`, TTL on `expires_at`) or `sqlite:<path>`: enables the command audit log |
 | `SANDBOX_AUDIT_RETENTION_DAYS` | `90` | Days audit entries are kept |
+| `SANDBOX_SNAPSHOTS` | unset | `s3://<bucket>[/<prefix>]` or `dir:<path>`: enables workspace snapshots |
+| `SANDBOX_SNAPSHOT_LIMIT`, `SANDBOX_SNAPSHOT_MAX_MB`, `SANDBOX_SNAPSHOT_RETENTION_DAYS` | `10`, `200`, `30` | Snapshots per tenant, largest snapshot, days kept (on S3 also set a matching lifecycle rule; Terraform does) |
+| `SANDBOX_UPLOAD_MAX_MB`, `SANDBOX_DOWNLOAD_MAX_MB` | `50`, `100` | Largest file upload, and largest file or folder download |
+| `SANDBOX_RUNTIME_CONFIG` | on AWS: `ssm:/agent-sandbox/runtime-config` | `ssm:<parameter>` holding a JSON object of `SANDBOX_*` settings read at startup (lets settings change without replacing the host), or `off`; variables already set win |
 | `SANDBOX_NOTIFY_TOPIC_ARN` | unset | SNS topic for operator notices (new invite requests) |
 | `SANDBOX_ACCOUNTS` | unset | `dynamodb:<table>` or `sqlite:<path>`: console accounts, invites and usage metering |
 | `SANDBOX_CONSOLE_BASE_URL`, `SANDBOX_GITHUB_CLIENT_ID`, `SANDBOX_GITHUB_CLIENT_SECRET`, `SANDBOX_CONSOLE_SECRET` | unset | All four enable the [console](console.md) |

@@ -554,7 +554,9 @@ def build_console_router(
                          for i in accounts().github_installations(tenant)] if gh_app() is not None else []
         return render(request, "workspaces.html", status_code, workspaces=sessions.list(tenant),
                       egress=egress(tenant), limits=limits(tenant), ttl_minutes=sessions.ttl_seconds // 60, error=error,
-                      github_enabled=gh_app() is not None, installations=installations)
+                      github_enabled=gh_app() is not None, installations=installations,
+                      snapshots_enabled=sessions.snapshots_enabled,
+                      snapshots=sessions.snapshots(tenant) if sessions.snapshots_enabled else [])
 
     @router.get("/workspaces", response_class=HTMLResponse)
     @guarded
@@ -595,7 +597,8 @@ def build_console_router(
             return render(request, "message.html", status_code, title="Workspace not available",
                           message=f"{message}. Workspaces close after {sessions.ttl_seconds // 60} minutes without use.")
         return render(request, "workspace.html", workspace=workspace, home=HOME, start_cwd=clean_cwd(cwd),
-                      ttl_minutes=sessions.ttl_seconds // 60)
+                      ttl_minutes=sessions.ttl_seconds // 60, snapshots_enabled=sessions.snapshots_enabled,
+                      upload_max_mb=sessions.upload_max_bytes // 2**20)
 
     @router.post("/workspaces/{session_id}/delete")
     @guarded
@@ -654,6 +657,95 @@ def build_console_router(
             status_code, message = failure(e)
             return json_response(status_code, {"error": message})
         return json_response(200, result)
+
+    # ---------------------------------------------------------------- files and snapshots
+
+    @router.post("/workspaces/{session_id}/upload")
+    async def workspace_upload(request: Request, session_id: str, path: str = ""):
+        """The raw request body becomes /workspace/<path> (the page sends one file per request)."""
+        session = require_api(request)
+        if session is None:
+            return json_response(401, {"error": "Your console session expired. Reload the page."})
+        limit = sessions.upload_max_bytes
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                return json_response(413, {"error": f"Uploads are limited to {limit // 2**20} MB per file."})
+            chunks.append(chunk)
+        try:
+            result = await run_in_threadpool(sessions.upload, session["tid"], session_id, path, b"".join(chunks),
+                                             actor=f"console @{session['login']}")
+        except Exception as e:
+            status_code, message = failure(e)
+            return json_response(status_code, {"error": message})
+        return json_response(200, result)
+
+    def attachment(data: bytes, filename: str, media_type: str) -> Response:
+        safe = "".join(c for c in filename if c.isalnum() or c in "._-") or "download"
+        return Response(content=data, media_type=media_type, headers={
+            **SECURITY_HEADERS, "Content-Disposition": f'attachment; filename="{safe}"',
+            "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+    @router.get("/workspaces/{session_id}/download")
+    @guarded
+    async def workspace_download(request: Request, session_id: str, path: str = "", folder: str = ""):
+        """A file, or with folder=1 a .tar.gz of a folder ("." = the whole workspace)."""
+        session = require(request)
+        actor = f"console @{session['login']}"
+        try:
+            if folder:
+                data = await run_in_threadpool(sessions.download_archive, session["tid"], session_id, path or ".",
+                                               actor=actor)
+                base = "workspace" if path.strip() in ("", ".") else os.path.basename(path.strip().rstrip("/"))
+                return attachment(data, f"{base}.tar.gz", "application/gzip")
+            data = await run_in_threadpool(sessions.download, session["tid"], session_id, path, actor=actor)
+        except Exception as e:
+            status_code, message = failure(e)
+            return render(request, "message.html", status_code, title="Download failed", message=message)
+        return attachment(data, os.path.basename(path.rstrip("/")), "application/octet-stream")
+
+    @router.post("/workspaces/{session_id}/snapshot")
+    @guarded
+    async def workspace_snapshot(request: Request, session_id: str, csrf: str = Form(""), name: str = Form("")):
+        session = require(request, csrf)
+        response = redirect(f"/console/workspaces/{session_id}")
+        try:
+            snap = await run_in_threadpool(sessions.snapshot, session["tid"], session_id, name.strip() or None,
+                                           actor=f"console @{session['login']}")
+            set_flash(response, "ok", f"Saved snapshot “{snap['name']}” ({snap['size_bytes'] / 2**20:.1f} MB). "
+                                      "Start a new workspace from it on the Workspaces page.")
+        except Exception as e:
+            set_flash(response, "error", f"Snapshot failed: {failure(e)[1]}")
+        return response
+
+    @router.post("/snapshots/{snapshot_id}/start", response_class=HTMLResponse)
+    @guarded
+    async def start_from_snapshot(request: Request, snapshot_id: str, csrf: str = Form(""), internet: str = Form("")):
+        session = require(request, csrf)
+        tenant = session["tid"]
+        try:
+            created = await run_in_threadpool(sessions.create_from_snapshot, tenant,
+                                              egress(tenant) if internet else [], snapshot_id,
+                                              actor=f"console @{session['login']}")
+        except Exception as e:
+            status_code, message = failure(e)
+            return workspaces_page(request, session, error=message, status_code=status_code)
+        response = redirect(f"/console/workspaces/{created['session_id']}")
+        set_flash(response, "ok", "Restored the snapshot into this new workspace.")
+        return response
+
+    @router.post("/snapshots/{snapshot_id}/delete")
+    @guarded
+    async def delete_snapshot(request: Request, snapshot_id: str, csrf: str = Form("")):
+        session = require(request, csrf)
+        response = redirect("/console/workspaces")
+        try:
+            snap = await run_in_threadpool(sessions.delete_snapshot, session["tid"], snapshot_id)
+            set_flash(response, "ok", f"Deleted snapshot “{snap['name']}”.")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
 
     return router
 

@@ -12,7 +12,7 @@ from typing import Any, Optional, Union
 
 from airlock_sandbox.errors import STATUS_ERRORS, APIConnectionError, RateLimitError, SandboxError
 
-IDEMPOTENT = {"GET", "DELETE"}
+IDEMPOTENT = {"GET", "PUT", "DELETE"}
 
 
 class HTTPClient:
@@ -44,12 +44,14 @@ class HTTPClient:
     def request(
         self, method: str, path: str, body: Optional[dict] = None, *,
         timeout: Optional[float] = None, retries: Optional[int] = None,
+        data: Optional[bytes] = None, raw: bool = False,
     ) -> Any:
-        """`timeout` / `retries` override the client defaults for this one call."""
+        """`timeout` / `retries` override the client defaults for this one call. `data` sends raw
+        bytes instead of a JSON body; `raw` returns the response bytes instead of parsed JSON."""
         attempt = 0
         while True:
             try:
-                return self._send(method, path, body, timeout)
+                return self._send(method, path, body, timeout, data, raw)
             except SandboxError as err:
                 wait = self._retry_wait(err, method, attempt, retries)
                 if wait is None:
@@ -72,27 +74,33 @@ class HTTPClient:
             return backoff
         return None
 
-    def _send(self, method: str, path: str, body: Optional[dict], timeout: Optional[float] = None) -> Any:
+    def _send(self, method: str, path: str, body: Optional[dict], timeout: Optional[float] = None,
+              data: Optional[bytes] = None, raw: bool = False) -> Any:
+        if data is None and body is not None:
+            data = json.dumps(body).encode()
+            content_type = "application/json"
+        else:
+            content_type = "application/octet-stream"
         req = urllib.request.Request(
             self.base_url + path,
-            data=json.dumps(body).encode() if body is not None else None,
+            data=data,
             headers={
                 "X-API-Key": self.api_key,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
+                "Content-Type": content_type,
+                "Accept": "*/*" if raw else "application/json",
                 "User-Agent": self.user_agent,
             },
             method=method,
         )
         try:
             with urllib.request.urlopen(req, context=self._ssl, timeout=timeout or self.timeout) as resp:
-                raw = resp.read()
+                content = resp.read()
         except urllib.error.HTTPError as err:
             raise self._http_error(err) from None
         except (urllib.error.URLError, socket.timeout, ConnectionError, ssl.SSLError) as err:
             reason = getattr(err, "reason", err)
             raise APIConnectionError(f"Could not reach {self.base_url}: {reason}") from None
-        return json.loads(raw) if raw else None
+        return content if raw else json.loads(content) if content else None
 
     @staticmethod
     def _http_error(err: urllib.error.HTTPError) -> SandboxError:

@@ -134,6 +134,29 @@ variable "audit_retention_days" {
   }
 }
 
+variable "snapshot_retention_days" {
+  description = "Days workspace snapshots are kept (an S3 lifecycle rule deletes older ones)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.snapshot_retention_days >= 1 && var.snapshot_retention_days <= 365
+    error_message = "snapshot_retention_days must be between 1 and 365."
+  }
+}
+
+variable "snapshot_limit" {
+  description = "Most snapshots one tenant can keep at a time."
+  type        = number
+  default     = 10
+}
+
+variable "snapshot_max_mb" {
+  description = "Largest snapshot (compressed workspace archive) in MB."
+  type        = number
+  default     = 200
+}
+
 variable "acme_email" {
   description = "Contact email for TLS certificates (Let's Encrypt expiry notices). Setting it also lets Caddy fall back to ZeroSSL when Let's Encrypt refuses, e.g. its 5-certificates-per-week limit."
   type        = string

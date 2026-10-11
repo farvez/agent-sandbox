@@ -150,6 +150,43 @@ document.addEventListener("submit", (event) => {
     }
   });
 
+  // Uploads: one request per file, the raw bytes as the body, into the chosen folder
+  // (default: the terminal's current folder).
+  const uploadForm = document.getElementById("upload-form");
+  uploadForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const home = root.dataset.home;
+    const current = cwd === home ? "" : cwd.startsWith(home + "/") ? cwd.slice(home.length + 1) : "";
+    const folder = (uploadForm.elements.folder.value.trim() || current).replace(/^\/+|\/+$/g, "");
+    const button = uploadForm.querySelector("button");
+    button.disabled = true;
+    try {
+      for (const file of uploadForm.elements.files.files) {
+        const path = folder ? `${folder}/${file.name}` : file.name;
+        const pending = line(`uploading ${path}…`, "muted");
+        try {
+          const response = await fetch(`${base}/upload?${new URLSearchParams({ path })}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": root.dataset.csrf },
+            body: file,
+            credentials: "same-origin",
+          });
+          let data = {};
+          try { data = await response.json(); } catch { data = { error: `HTTP ${response.status}` }; }
+          if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          pending.remove();
+          line(`Uploaded ${data.path} (${data.size_bytes} bytes)`, "ok");
+        } catch (error) {
+          pending.remove();
+          line(`Upload of ${path} failed: ${error.message}`, "err");
+        }
+      }
+      uploadForm.reset();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   showPrompt();
   if (window.matchMedia("(min-width: 700px)").matches) input.focus({ preventScroll: true });
 })();
