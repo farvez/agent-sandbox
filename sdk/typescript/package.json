@@ -1,6 +1,6 @@
 {
   "name": "airlock-sandbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript SDK for Airlock: isolated, network-controlled sandboxes for AI coding agents",
   "license": "MIT",
   "author": "Farvez Anzam",

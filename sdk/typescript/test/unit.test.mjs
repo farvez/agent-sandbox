@@ -241,3 +241,18 @@ test("snapshots: save, list, restore, start from one, delete", async () => {
   await Sandbox.create(opts(server, { snapshot: snap.id }));
   assert.equal(server.calls.at(-1).body.snapshot_id, snap.id);
 });
+test("persistent sandboxes and previews", async () => {
+  const server = fakeServer({
+    "POST /v1/sessions": ({ body }) => [201, { session_id: "sbx_1", tenant_id: "acme", egress: [], disk_quota_mb: 512, persistent: Boolean(body.persistent) }],
+    "POST /v1/sessions/sbx_1/previews": ({ body }) => ({ port: body.port, url: `https://${body.port}-0123456789abcdef.preview.test` }),
+    "DELETE /v1/sessions/sbx_1/previews/8000": () => ({ port: 8000, status: "closed" }),
+  });
+  const sbx = await Sandbox.create(opts(server, { persistent: true }));
+  assert.equal(server.calls[0].body.persistent, true);
+  assert.equal(sbx.persistent, true);
+  assert.equal(await sbx.expose(8000), "https://8000-0123456789abcdef.preview.test");
+  await sbx.unexpose(8000);
+  const regular = await Sandbox.create(opts(server));
+  assert.equal("persistent" in server.calls.at(-1).body, false);
+  assert.equal(regular.persistent, false);
+});

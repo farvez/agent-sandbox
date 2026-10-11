@@ -134,6 +134,23 @@ variable "audit_retention_days" {
   }
 }
 
+variable "preview_domain" {
+  description = "Domain for preview URLs (<port>-<token>.<preview_domain>), e.g. \"airlock-preview.example.com\"; needs a wildcard DNS record *.<preview_domain> pointing at the server. Empty = previews off. Best on a domain of its own: previews serve users' code."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.preview_domain == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.preview_domain))
+    error_message = "preview_domain must be a lowercase domain name like airlock-preview.example.com, or empty."
+  }
+}
+
+variable "max_persistent_sessions" {
+  description = "Long-running sessions the server runs at once across all tenants (each keeps a 256 MB container)."
+  type        = number
+  default     = 8
+}
+
 variable "snapshot_retention_days" {
   description = "Days workspace snapshots are kept (an S3 lifecycle rule deletes older ones)."
   type        = number

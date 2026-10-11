@@ -18,3 +18,9 @@ service, you must offer its users the corresponding source code (section 13).
 
 Versions of the server published up to commit 876c1fa (4 October 2026) were
 released under the MIT License; copies obtained under those terms keep them.
+
+Third-party code included:
+
+  * xterm.js 5.5.0 and @xterm/addon-fit 0.10.0 (src/console/static/vendor/),
+    Copyright (c) 2017-2019 The xterm.js authors and others, MIT License
+    (see src/console/static/vendor/LICENSE-xterm.txt).

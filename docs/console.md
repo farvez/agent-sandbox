@@ -40,6 +40,13 @@ commands count toward usage like API calls.
 - **Snapshots:** *Save a snapshot* archives `/workspace` (inside the sandbox) to S3; the
   Workspaces page lists them with **Start** (a new workspace with those files) and **Delete**.
   Each tenant keeps up to 10, for 30 days (`snapshot_limit`, `snapshot_retention_days`).
+- **Long-running workspaces** (the default when starting one): one container for the whole
+  workspace, an **interactive terminal** (xterm.js over a WebSocket; the socket must come from
+  the console's own origin and carry the page's CSRF token), background processes that keep
+  running, and **Preview a web app**: a link to a port the workspace's server listens on.
+  Regular workspaces keep the line-by-line terminal.
+- **Cookies** are `__Host-` cookies over https, so preview sites (on subdomains) can't set
+  cookies the console would read.
 - **Terminal safety:** commands go through the same exec path as the API (gVisor, limits,
   metering); output is inserted as text, never HTML; requests carry the CSRF token in a header.
 

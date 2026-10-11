@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
+# Base names; over https the console uses them with the __Host- prefix (see build_console_router).
 SESSION_COOKIE = "airlock_session"
 STATE_COOKIE = "airlock_oauth_state"
 SESSION_TTL = 7 * 86400

@@ -72,6 +72,20 @@ with Sandbox(snapshot=snap["id"]) as sbx:      # starts with the snapshot's file
 `sbx.restore(id, path=".")` unpacks a snapshot into a running sandbox; `sbx.list_snapshots()` and
 `sbx.delete_snapshot(id)` manage them. Snapshots include installed packages under `/workspace/.local`.
 
+## Long-running sandboxes and previews
+
+```python
+with Sandbox(persistent=True, egress=["pypi"]) as sbx:
+    sbx.files.write("app.py", "from flask import Flask\napp = Flask(__name__)\n@app.get('/')\ndef hi(): return 'hi'")
+    sbx.run("pip install flask", timeout=60).check()
+    sbx.run("nohup flask --app app run --host 0.0.0.0 --port 8000 > flask.log 2>&1 &").check()
+    print(sbx.expose(8000))        # https://8000-<token>.<preview domain>, open while the sandbox is
+```
+
+One container runs for the whole session, so background processes keep running between
+commands (redirect their output, as above). Each account can run a few at a time. The server's
+interactive terminal is a WebSocket; see the [API reference](https://github.com/farvez/agent-sandbox/blob/main/docs/api.md#long-running-sessions).
+
 ## Internet access (egress)
 
 Sandboxes have no network by default. Ask for specific hosts — they must be allowed by

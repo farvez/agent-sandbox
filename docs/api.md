@@ -8,7 +8,7 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | Method | Path | Body / query | Result |
 |--------|------|--------------|--------|
 | GET | `/healthz` | — | `{status, active_sessions}` |
-| POST | `/v1/sessions` | `{template?, metadata?, egress?, snapshot_id?}` (a snapshot is restored into the new workspace) | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
+| POST | `/v1/sessions` | `{template?, metadata?, egress?, snapshot_id?, persistent?}` (a snapshot is restored into the new workspace; `persistent: true` = a [long-running session](#long-running-sessions)) | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
 | GET | `/v1/sessions` | — | `{tenant_id, sessions: [{session_id, egress, created_at, last_accessed_at, expires_at, disk_quota_mb}]}` — this tenant's open sessions |
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
@@ -21,6 +21,9 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | POST | `/v1/sessions/{id}/restore` | `{snapshot_id, path?}` | `{restored, path}` — unpacks a snapshot into `/workspace/<path>` · `404` unknown snapshot |
 | GET | `/v1/snapshots` | — | `{tenant_id, snapshots, limit, max_mb, retention_days}` — newest first |
 | DELETE | `/v1/snapshots/{snapshot_id}` | — | `{deleted}` · `404` |
+| POST | `/v1/sessions/{id}/previews` | `{port}` (1024–65535) | `{port, url}` — a public preview URL for a server in a long-running session · `409` not long-running · `501` previews disabled |
+| DELETE | `/v1/sessions/{id}/previews/{port}` | — | `{port, status: "closed"}` |
+| WebSocket | `/v1/sessions/{id}/terminal` | `X-API-Key` header; `?rows=&cols=` | interactive bash on a PTY in a long-running session (see below) · closes `1008` for a bad key, another tenant's or a regular session |
 | DELETE | `/v1/sessions/{id}` | — | `{status: "terminated"}` |
 | GET | `/v1/sessions/{id}/egress` | `?limit=` | `{session_id, events: [...]}` — the session's egress log |
 | GET | `/v1/egress/policy` | — | `{tenant_id, allowed}` — hosts this tenant may request |
@@ -30,11 +33,32 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | GET/POST | `/v1/admin/keys` | `?tenant=` / `{tenant, name?}` | admin key only: list all / issue for any tenant |
 | DELETE | `/v1/admin/keys/{key_id}` | — | admin key only: revoke any key |
 | GET | `/v1/usage` | — | `{tenant_id, limits, sessions_open, commands_running, requests_available}` |
-| GET/POST/DELETE | `/mcp` | MCP Streamable HTTP; key in `X-API-Key` or `Authorization: Bearer`; `?egress=pypi`, `?workspace=name` | Remote MCP endpoint: the same tools as the local MCP server plus `activity`; one sandbox per key, egress and workspace · `401` bad key · `429` rate limit |
+| GET/POST/DELETE | `/mcp` | MCP Streamable HTTP; key in `X-API-Key` or `Authorization: Bearer`; `?egress=pypi`, `?workspace=name`, `?persistent=1` (long-running; adds `preview_url`) | Remote MCP endpoint: the same tools as the local MCP server plus `activity`; one sandbox per key, egress and workspace · `401` bad key · `429` rate limit |
 | GET | `/v1/audit` | `?limit=` (≤500) `&before=` | `{tenant_id, entries: [{ts, session_id, actor, kind, command, exit_code, duration_s, timed_out, oom_killed, detail}], next, retention_days}` — this tenant's command history, newest first; pass `next` as `before` for older entries · `501` when disabled |
 
 `exec` output is plain text with `[STDOUT]:`, `[STDERR]:`, `[WARNING]:` (OOM kill or over disk quota),
 `[TIMEOUT]:` and a final `[EXIT CODE]: n` line. Allowed templates: `sandbox-base:latest`, `python:3.11-slim`.
+
+## Long-running sessions
+
+`POST /v1/sessions` with `"persistent": true` keeps one container running for the whole session
+instead of one per command. Commands run in it with `docker exec`, so:
+
+- **Background processes survive** between commands: start them with
+  `nohup cmd > log 2>&1 &` (output of a background job that isn't redirected is discarded).
+- **Interactive terminal:** a WebSocket to `/v1/sessions/{id}/terminal`. Binary frames carry raw
+  terminal bytes both ways; a text frame `{"type": "resize", "rows": 40, "cols": 120}` resizes.
+  The server closes with `1000` when the shell exits. Typing keeps the session alive.
+- **Previews:** `POST /v1/sessions/{id}/previews {"port": 8000}` returns
+  `https://8000-<token>.<preview domain>`; requests to it are proxied to the session's server
+  (which must listen on `0.0.0.0`) with `Host: localhost:<port>`. Anyone with the link can open
+  it while the session is open; using it keeps the session alive. WebSockets (live reload)
+  aren't forwarded yet. Up to 5 ports per session.
+
+The container has the same limits and isolation as per-command ones (gVisor, 256 MB, 1 CPU, 64
+processes, read-only root, no capabilities) and no network unless the session asked for egress.
+Each tenant can run `max_persistent_sessions` (default 2) at once; the server caps the total
+(`SANDBOX_MAX_PERSISTENT_SESSIONS`, default 8).
 
 ## Self-service API keys
 
@@ -107,6 +131,8 @@ the client) shows a tenant its limits and current usage; client errors carry
 | `SANDBOX_AUDIT_RETENTION_DAYS` | `90` | Days audit entries are kept |
 | `SANDBOX_SNAPSHOTS` | unset | `s3://<bucket>[/<prefix>]` or `dir:<path>`: enables workspace snapshots |
 | `SANDBOX_SNAPSHOT_LIMIT`, `SANDBOX_SNAPSHOT_MAX_MB`, `SANDBOX_SNAPSHOT_RETENTION_DAYS` | `10`, `200`, `30` | Snapshots per tenant, largest snapshot, days kept (on S3 also set a matching lifecycle rule; Terraform does) |
+| `SANDBOX_PREVIEW_DOMAIN` | unset | Domain for preview URLs (`<port>-<token>.<domain>`); needs wildcard DNS and a TLS proxy that asks `/internal/preview-allowed` (Terraform sets up Caddy). Unset = previews off |
+| `SANDBOX_MAX_PERSISTENT_SESSIONS` | `8` | Long-running sessions on this server at once |
 | `SANDBOX_UPLOAD_MAX_MB`, `SANDBOX_DOWNLOAD_MAX_MB` | `50`, `100` | Largest file upload, and largest file or folder download |
 | `SANDBOX_RUNTIME_CONFIG` | on AWS: `ssm:/agent-sandbox/runtime-config` | `ssm:<parameter>` holding a JSON object of `SANDBOX_*` settings read at startup (lets settings change without replacing the host), or `off`; variables already set win |
 | `SANDBOX_NOTIFY_TOPIC_ARN` | unset | SNS topic for operator notices (new invite requests) |

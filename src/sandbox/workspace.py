@@ -9,6 +9,7 @@ from src.egress.gateway import EgressGateway, EgressSession, get_gateway
 from src.egress.proxy import expand_rules
 from src.sandbox import files
 from src.sandbox.gvisor import GVisorSandboxRunner
+from src.sandbox.session_container import SessionContainer, preview_token
 from src.sandbox.workspace_pool import QuotaExceededError, disk_usage, get_pool, quota_bytes_from_env
 
 # Every container gets these. User installs land in the persistent workspace
@@ -33,6 +34,10 @@ class SandboxedWorkspace:
     The workspace has a disk quota (SANDBOX_WORKSPACE_QUOTA_MB, default 512): enforced
     by the kernel when SANDBOX_WORKSPACE_POOL points at the quota-limited slot pool,
     and checked by the workspace itself everywhere (see workspace_pool.py).
+
+    `persistent=True` keeps one container running for the whole session instead of one per
+    command, so background processes survive, an interactive terminal can attach, and ports
+    the session listens on can be previewed (see session_container.py).
     """
 
     def __init__(
@@ -43,6 +48,7 @@ class SandboxedWorkspace:
         tenant_id: str = "local",
         gateway: Optional[EgressGateway] = None,
         quota_mb: Optional[int] = None,
+        persistent: bool = False,
     ):
         self.base_image = base_image
         self.session_id = session_id or f"local_{uuid.uuid4().hex[:12]}"
@@ -65,12 +71,25 @@ class SandboxedWorkspace:
         self.egress_rules = expand_rules(egress or [])
         self.gateway: Optional[EgressGateway] = None
         self.egress: Optional[EgressSession] = None
-        if self.egress_rules:
-            try:
+        self.session_container: Optional[SessionContainer] = None
+        self.preview_token = preview_token()
+        self.exposed_ports: List[int] = []
+        try:
+            if self.egress_rules:
                 self._connect_egress(gateway)
-            except Exception:
-                self.cleanup()
-                raise
+            if persistent:
+                self.session_container = SessionContainer.start(
+                    self.client, self.session_id, image=self.base_image, workspace_dir=self.workspace_dir,
+                    user=self.container_user, runtime="runsc" if self.has_gvisor else None,
+                    environment=self._environment(), network_name=self.egress_network,
+                )
+        except Exception:
+            self.cleanup()
+            raise
+
+    @property
+    def persistent(self) -> bool:
+        return self.session_container is not None
 
     # ------------------------------------------------------------- surviving an API restart
 
@@ -85,6 +104,8 @@ class SandboxedWorkspace:
                 "network_name": self.egress.network_name, "container_id": self.egress.container.id,
                 "proxy_url": self.egress.proxy_url,
             },
+            "session_container": self.session_container.state() if self.session_container else None,
+            "preview_token": self.preview_token, "exposed_ports": list(self.exposed_ports),
         }
 
     @classmethod
@@ -111,6 +132,13 @@ class SandboxedWorkspace:
         if saved:
             ws.gateway = get_gateway(ws.client, runtime="runsc" if ws.has_gvisor else None, user=ws.container_user)
             ws.egress = ws.gateway.reconnect(ws.session_id, saved["network_name"], saved["container_id"], saved["proxy_url"])
+        ws.session_container = None
+        box = state.get("session_container")
+        if box:
+            ws.session_container = SessionContainer.reconnect(ws.client, ws.session_id, box["container_id"],
+                                                              box["network_name"], bool(box["owns_network"]))
+        ws.preview_token = state.get("preview_token") or preview_token()
+        ws.exposed_ports = [int(p) for p in state.get("exposed_ports") or []]
         return ws
 
     def _connect_egress(self, gateway: Optional[EgressGateway]) -> None:
@@ -247,6 +275,16 @@ class SandboxedWorkspace:
         finally:
             files.remove_quietly(path)
 
+    def _environment(self) -> Dict[str, str]:
+        environment: Dict[str, str] = dict(BASE_ENV)
+        if self.proxy_url:
+            # Upper- and lower-case: different tools read different spellings.
+            for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+                environment[var] = self.proxy_url
+            # Previews: the host reaches the session's own servers directly, never via the proxy.
+            environment["NO_PROXY"] = environment["no_proxy"] = "localhost,127.0.0.1"
+        return environment
+
     def run_command(self, command: str, timeout_seconds: int = 15) -> str:
         """Executes a command and returns the result as text (the agent tools' format)."""
         return format_result(self.execute(command, timeout_seconds))
@@ -256,6 +294,15 @@ class SandboxedWorkspace:
 
         Returns {stdout, stderr, exit_code, timed_out, oom_killed, warnings}.
         """
+        if self.session_container is not None:
+            result = self.session_container.execute(command, timeout_seconds)
+            used = self.disk_usage_bytes()
+            if used > self.quota_bytes:
+                result["warnings"].append(
+                    f"Workspace uses {used / 2**20:.1f} MB, over its "
+                    f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files before writing more."
+                )
+            return result
         container = None
         try:
             mounts = {
@@ -265,11 +312,7 @@ class SandboxedWorkspace:
                 }
             }
 
-            environment: Dict[str, str] = dict(BASE_ENV)
-            if self.proxy_url:
-                # Upper- and lower-case: different tools read different spellings.
-                for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
-                    environment[var] = self.proxy_url
+            environment = self._environment()
 
             container_kwargs = {
                 "image": self.base_image,
@@ -347,6 +390,9 @@ class SandboxedWorkspace:
 
     def cleanup(self):
         """Wipes the ephemeral workspace directory and removes the session's egress network."""
+        if getattr(self, "session_container", None) is not None:
+            self.session_container.remove()
+            self.session_container = None
         if self.gateway and self.egress:
             self.gateway.detach(self.egress)
             self.egress = None

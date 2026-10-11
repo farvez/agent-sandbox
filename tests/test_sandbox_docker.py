@@ -308,3 +308,82 @@ def test_execute_returns_structured_result(workspace):
                       "timed_out": False, "oom_killed": False, "warnings": []}
     timed = workspace.execute("sleep 10", timeout_seconds=1)
     assert timed["timed_out"] and timed["exit_code"] == -1
+
+
+# ---------------------------------------------------------------- long-running sessions
+
+
+@pytest.fixture
+def persistent():
+    with SandboxedWorkspace(persistent=True) as ws:
+        yield ws
+
+
+def test_persistent_background_process_survives(persistent):
+    import time
+    import urllib.request
+
+    assert persistent.execute("echo hi")["stdout"] == "hi\n"
+    started = persistent.execute("nohup python3 -m http.server 8123 --bind 0.0.0.0 > /tmp/srv.log 2>&1 & echo ok")
+    assert started["exit_code"] == 0 and started["stdout"] == "ok\n"
+    ip = persistent.session_container.ip_address()
+    body = b""
+    for _ in range(30):                                   # the host reaches it: what previews use
+        try:
+            body = urllib.request.urlopen(f"http://{ip}:8123/", timeout=2).read()
+            break
+        except OSError:
+            time.sleep(0.3)
+    assert b"Directory listing" in body
+    probe = "python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8123/').status)\""
+    assert persistent.execute(probe)["stdout"].strip() == "200"
+
+
+def test_persistent_timeout_and_exit_codes(persistent):
+    r = persistent.execute("echo before; sleep 30", timeout_seconds=2)
+    assert r["timed_out"] and r["stdout"] == "before\n"
+    r = persistent.execute("echo err >&2; exit 7")
+    assert r["exit_code"] == 7 and r["stderr"] == "err\n" and not r["timed_out"]
+    # A background job that keeps stdout open doesn't hold the command.
+    r = persistent.execute("sleep 60 & echo spawned", timeout_seconds=10)
+    assert r["stdout"] == "spawned\n" and not r["timed_out"]
+
+
+def test_persistent_has_no_network(persistent):
+    r = persistent.execute("python3 -c \"import socket; socket.create_connection(('1.1.1.1', 443), 3)\"")
+    assert r["exit_code"] != 0
+
+
+def test_persistent_terminal(persistent):
+    import time
+
+    pty = persistent.session_container.open_pty(30, 100)
+    try:
+        pty.write(b"stty size; echo DONE-$((6*7))\n")
+        out, deadline = b"", time.time() + 10
+        while b"DONE-42" not in out and time.time() < deadline:
+            out += pty.read()
+        assert b"30 100" in out and b"DONE-42" in out
+    finally:
+        pty.close()
+
+
+def test_persistent_cleanup_removes_container_and_network():
+    import docker
+
+    ws = SandboxedWorkspace(persistent=True)
+    box, net = ws.session_container.container.id, ws.session_container.network_name
+    ws.cleanup()
+    client = docker.from_env()
+    assert not client.containers.list(all=True, filters={"id": box})
+    assert not client.networks.list(names=[net])
+
+
+def test_persistent_survives_restore():
+    ws = SandboxedWorkspace(persistent=True)
+    try:
+        ws.execute("echo kept > note.txt")
+        again = SandboxedWorkspace.restore(ws.state())
+        assert again.persistent and again.execute("cat note.txt")["stdout"] == "kept\n"
+    finally:
+        ws.cleanup()

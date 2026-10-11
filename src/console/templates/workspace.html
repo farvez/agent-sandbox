@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% set active = 'workspaces' %}
 {% block title %}{{ workspace.session_id }} · Airlock console{% endblock %}
+{% block head %}
+{% if interactive %}
+  <link rel="stylesheet" href="/console/static/vendor/xterm.css?v={{ asset_version }}">
+  <script src="/console/static/vendor/xterm.js?v={{ asset_version }}" defer></script>
+  <script src="/console/static/vendor/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
+  <script src="/console/static/terminal.js?v={{ asset_version }}" defer></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="heading-row">
   <div>
@@ -9,6 +17,7 @@
     <p class="muted small">
       Internet: {% if workspace.egress %}{% for host in workspace.egress %}<code>{{ host }}</code>{{ ", " if not loop.last }}{% endfor %}{% else %}none{% endif %}
       · {{ workspace.disk_quota_mb }} MB disk · closes after {{ ttl_minutes }} min idle
+      {% if interactive %}· <span class="pill ok">long-running</span>{% endif %}
     </p>
   </div>
   <form method="post" action="/console/workspaces/{{ workspace.session_id }}/delete" data-confirm="Close this workspace and delete its files?">
@@ -57,6 +66,45 @@
 </details>
 {% endif %}
 
+{% if interactive %}
+{% if previews_enabled %}
+<details class="card previews" {% if workspace.previews %}open{% endif %}>
+  <summary>Preview a web app{% if workspace.previews %} ({{ workspace.previews | length }} open){% endif %}</summary>
+  {% if workspace.previews %}
+  <ul class="previews-list">
+    {% for p in workspace.previews %}
+    <li>
+      <code>{{ p.port }}</code> → <a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url }}</a>
+      <form class="inline-mini" method="post" action="/console/workspaces/{{ workspace.session_id }}/previews/{{ p.port }}/close">
+        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+        <button class="button" type="submit">Close</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="inline" method="post" action="/console/workspaces/{{ workspace.session_id }}/previews">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <input name="port" required inputmode="numeric" pattern="[0-9]{4,5}" maxlength="5" placeholder="port, e.g. 8000" aria-label="Port">
+    <button class="button primary" type="submit">Get a preview link</button>
+  </form>
+  <p class="muted small">Start a server in the terminal that listens on <code>0.0.0.0</code>, e.g.
+    <code>python -m http.server 8000</code> or <code>npm run dev -- --host 0.0.0.0</code>. Anyone with the link can
+    open it while this workspace is open. Live-reload websockets aren't forwarded yet.</p>
+</details>
+{% endif %}
+
+<section class="xterm-wrap">
+  <div id="xterm" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" aria-label="Terminal"></div>
+  <p class="muted small">A real shell in this workspace: background jobs keep running (<code>nohup cmd &gt; log 2&gt;&amp;1 &amp;</code>),
+    and so does everything you start, until the workspace closes.</p>
+</section>
+<section class="terminal compact" id="terminal" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" data-home="{{ home }}" data-cwd="{{ start_cwd }}">
+  <div class="term-output" id="term-output" role="log" aria-live="polite" tabindex="0">
+    <div class="term-line muted">Uploads and imports report here.</div>
+  </div>
+</section>
+{% else %}
 <section class="terminal" id="terminal" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" data-home="{{ home }}" data-cwd="{{ start_cwd }}">
   <div class="term-output" id="term-output" role="log" aria-live="polite" tabindex="0">
     <div class="term-line muted">Each line runs as its own command in the sandbox (Python 3.11, bash). <code>cd</code> carries over; environment variables don't.
@@ -73,4 +121,5 @@ Try <kbd>ls</kbd>, <kbd>pip install requests</kbd>, <kbd>python -m pytest</kbd>.
     <button class="button primary" type="submit">Run</button>
   </form>
 </section>
+{% endif %}
 {% endblock %}

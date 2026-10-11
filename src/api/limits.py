@@ -2,7 +2,8 @@
 
 Configured as JSON (SANDBOX_TENANT_LIMITS, or a file via SANDBOX_TENANT_LIMITS_FILE):
 
-    {"*": {"max_sessions": 10, "requests_per_minute": 120, "max_concurrent_exec": 4},
+    {"*": {"max_sessions": 10, "requests_per_minute": 120, "max_concurrent_exec": 4,
+           "max_persistent_sessions": 2},
      "acme": {"max_sessions": 50}}
 
 "*" sets the defaults for every tenant; a tenant entry overrides individual fields.
@@ -16,7 +17,9 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Callable, Dict, Iterator, Optional
 
-BUILTIN_DEFAULTS = {"max_sessions": 10, "requests_per_minute": 120, "max_concurrent_exec": 4}
+# Persistent sessions keep a container (and its memory) for their whole life, so far fewer.
+BUILTIN_DEFAULTS = {"max_sessions": 10, "requests_per_minute": 120, "max_concurrent_exec": 4,
+                    "max_persistent_sessions": 2}
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class TenantLimits:
     max_sessions: int = BUILTIN_DEFAULTS["max_sessions"]
     requests_per_minute: int = BUILTIN_DEFAULTS["requests_per_minute"]
     max_concurrent_exec: int = BUILTIN_DEFAULTS["max_concurrent_exec"]
+    max_persistent_sessions: int = BUILTIN_DEFAULTS["max_persistent_sessions"]
 
 
 class LimitExceeded(Exception):
@@ -89,6 +93,7 @@ class LimitTracker:
         self._buckets: Dict[str, _TokenBucket] = {}
         self._sessions: Dict[str, int] = {}
         self._running: Dict[str, int] = {}
+        self._persistent: Dict[str, int] = {}
 
     def for_tenant(self, tenant_id: str) -> TenantLimits:
         return self.limits.get(tenant_id, self.limits.get("*", TenantLimits()))
@@ -110,25 +115,37 @@ class LimitTracker:
 
     # ------------------------------------------------------------------ sessions
 
-    def open_session(self, tenant_id: str) -> None:
-        """Reserves a session slot; call close_session when the session ends or fails to start."""
-        limit = self.for_tenant(tenant_id).max_sessions
+    def open_session(self, tenant_id: str, persistent: bool = False) -> None:
+        """Reserves a session slot; call close_session (same `persistent`) when the session ends or fails to start."""
+        limits = self.for_tenant(tenant_id)
         with self._lock:
             current = self._sessions.get(tenant_id, 0)
-            if current >= limit:
+            if current >= limits.max_sessions:
                 raise LimitExceeded(
-                    f"Session limit reached: {current} of {limit} sessions are open. Delete one first."
+                    f"Session limit reached: {current} of {limits.max_sessions} sessions are open. Delete one first."
+                )
+            running = self._persistent.get(tenant_id, 0)
+            if persistent and running >= limits.max_persistent_sessions:
+                raise LimitExceeded(
+                    f"Long-running session limit reached: {running} of {limits.max_persistent_sessions} are open. "
+                    "Close one first, or start a regular session."
                 )
             self._sessions[tenant_id] = current + 1
+            if persistent:
+                self._persistent[tenant_id] = running + 1
 
-    def restore_session(self, tenant_id: str) -> None:
+    def restore_session(self, tenant_id: str, persistent: bool = False) -> None:
         """Counts a session taken back after an API restart (it existed already, so no limit check)."""
         with self._lock:
             self._sessions[tenant_id] = self._sessions.get(tenant_id, 0) + 1
+            if persistent:
+                self._persistent[tenant_id] = self._persistent.get(tenant_id, 0) + 1
 
-    def close_session(self, tenant_id: str) -> None:
+    def close_session(self, tenant_id: str, persistent: bool = False) -> None:
         with self._lock:
             self._sessions[tenant_id] = max(0, self._sessions.get(tenant_id, 0) - 1)
+            if persistent:
+                self._persistent[tenant_id] = max(0, self._persistent.get(tenant_id, 0) - 1)
 
     # ------------------------------------------------------------------ commands
 
@@ -162,6 +179,7 @@ class LimitTracker:
             return {
                 "limits": asdict(limits),
                 "sessions_open": self._sessions.get(tenant_id, 0),
+                "persistent_sessions_open": self._persistent.get(tenant_id, 0),
                 "commands_running": self._running.get(tenant_id, 0),
                 "requests_available": int(tokens),
             }

@@ -155,7 +155,8 @@ def test_admin_invites_through_the_console(console):
 def test_tampered_or_missing_session_means_signed_out(console):
     client, *_ = console
     sign_in(client, "code-admin")
-    client.cookies.set(SESSION_COOKIE, client.cookies.get(SESSION_COOKIE)[:-2] + "xx", domain="console.test")
+    name = "__Host-" + SESSION_COOKIE                  # https console: host-only cookie names
+    client.cookies.set(name, client.cookies.get(name)[:-2] + "xx", domain="console.test", path="/")
     assert "Sign in with GitHub" in client.get("/console").text
     assert client.get("/console/keys").status_code == 303
 
@@ -216,7 +217,7 @@ def test_stranger_gets_a_request_form_tied_to_their_github_account(console):
     denied = sign_in(client, "code-stranger")
     assert denied.status_code == 403 and "isn't invited" in html.unescape(denied.text)
     assert "Request an invite" in denied.text and "@stranger" in denied.text
-    assert "airlock_pending" in denied.headers["set-cookie"] and "httponly" in denied.headers["set-cookie"].lower()
+    assert "__Host-airlock_pending" in denied.headers["set-cookie"] and "httponly" in denied.headers["set-cookie"].lower()
 
     res = client.post("/console/request-invite", data={
         "csrf": request_form(denied.text), "note": "testing my agent " + "x" * 600, "contact": "me@example.com"})
@@ -232,7 +233,7 @@ def test_request_needs_the_signed_in_identity_and_its_token(console):
     denied = sign_in(client, "code-stranger")
     token = request_form(denied.text)
     assert client.post("/console/request-invite", data={"csrf": "forged"}).status_code == 400
-    client.cookies.set("airlock_pending", "tampered", domain="console.test", path="/console")
+    client.cookies.set("__Host-airlock_pending", "tampered", domain="console.test", path="/")
     assert client.post("/console/request-invite", data={"csrf": token}).status_code == 400
     assert accounts.list_requests() == []
 
@@ -296,7 +297,7 @@ def test_signing_in_as_an_uninvited_account_ends_the_previous_session(console):
     sign_in(client, "code-admin")
     denied = sign_in(client, "code-stranger")
     assert "@farvez" not in denied.text.lower() and "Sign out" not in denied.text
-    assert 'airlock_session=""' in denied.headers.get("set-cookie", "") or "airlock_session=;" in denied.headers.get("set-cookie", "")
+    assert '__Host-airlock_session=""' in denied.headers.get("set-cookie", "") or "__Host-airlock_session=;" in denied.headers.get("set-cookie", "")
     assert client.get("/console/keys").headers["location"] == "/console"
 
 
@@ -314,7 +315,7 @@ def test_admin_removes_a_user_everywhere(tmp_path):
     client, keystore, accounts = admin_client(tmp_path, sessions=sessions)
     accounts.invite("some-dev", invited_by="farvez")
     sign_in(client, "code-dev")
-    dev_cookie = client.cookies.get("airlock_session")
+    dev_cookie = client.cookies.get("__Host-airlock_session")
     keystore.issue("gh-some-dev", "laptop")
     keystore.issue("gh-some-dev", "ci")
     sessions.create("gh-some-dev", [])
@@ -330,7 +331,7 @@ def test_admin_removes_a_user_everywhere(tmp_path):
     assert not [k for k in keystore.list("gh-some-dev") if k.active] and sessions.list("gh-some-dev") == []
     client.cookies.clear()
 
-    client.cookies.set("airlock_session", dev_cookie, domain="console.test", path="/console")
+    client.cookies.set("__Host-airlock_session", dev_cookie, domain="console.test", path="/")
     assert client.get("/console/keys").headers["location"] == "/console"     # old login no longer works
     client.cookies.clear()
     denied = sign_in(client, "code-dev")
@@ -463,3 +464,11 @@ def test_assets_are_versioned_by_content(console, tmp_path):
     before = asset_version(str(tmp_path))
     (tmp_path / "a.css").write_text("body{color:red}")
     assert asset_version(str(tmp_path)) != before     # any change gives browsers a new URL
+
+
+def test_cookies_are_host_only_over_https(console):
+    client = console[0] if isinstance(console, tuple) else console
+    res = sign_in(client, "code-admin")
+    cookie = [c for c in res.headers.get_list("set-cookie") if "airlock_session" in c][0]
+    assert cookie.startswith("__Host-airlock_session=") and "Path=/;" in cookie and "Secure" in cookie
+    assert "Domain" not in cookie

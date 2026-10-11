@@ -111,6 +111,7 @@ class RemoteMcp:
             await self._error(send, AuthError(400, "workspace must be 1-40 letters, digits, '-' or '_'."))
             return
         state["airlock_workspace"] = workspace
+        state["airlock_persistent"] = (self._query_value(query, "persistent") or "").lower() in ("1", "true", "yes")
 
         async def send_and_bind(message):
             # The session id is assigned in the response to `initialize`: bind it to this tenant.
@@ -175,7 +176,8 @@ class RemoteMcp:
         Only the identity our own authentication put on the request is used."""
         state = ctx.request_context.request.state
         tenant, actor = state.airlock_tenant, state.airlock_actor
-        slot = (tenant, actor, state.airlock_workspace, tuple(state.airlock_egress))
+        persistent = bool(getattr(state, "airlock_persistent", False))
+        slot = (tenant, actor, state.airlock_workspace, tuple(state.airlock_egress), persistent)
         with self._lock:
             slot_lock = self._slot_locks.setdefault(slot, threading.Lock())
         with slot_lock:   # one sandbox per slot even if calls arrive together; other slots don't wait
@@ -184,7 +186,7 @@ class RemoteMcp:
                 return tenant, current, actor
             if current:
                 self.ops.end(tenant, current)
-            sandbox = self.ops.start(tenant, list(state.airlock_egress))
+            sandbox = self.ops.start(tenant, list(state.airlock_egress), persistent)
             self._sandbox[slot] = sandbox
         return tenant, sandbox, actor
 
@@ -208,7 +210,9 @@ class RemoteMcp:
             instructions=(
                 "A remote, isolated Linux sandbox (gVisor container, Python 3.11, bash) for running code. "
                 "Files in /workspace persist between commands; each command runs in a fresh container, "
-                "so background processes don't. Internet access is limited to the hosts listed by sandbox_info."
+                "so background processes don't (unless the MCP URL has ?persistent=1: then one container runs for "
+                "the whole sandbox, background servers keep running, and preview_url gives a link to a port). "
+                "Internet access is limited to the hosts listed by sandbox_info."
             ),
             version=self.version,
             website_url="https://github.com/farvez/agent-sandbox",
@@ -303,6 +307,18 @@ class RemoteMcp:
             """Unpack a saved snapshot into the sandbox workspace (or a folder of it). Files with the same names are replaced."""
             r = await self._call(ctx, lambda t, s, a: ops.restore(t, s, snapshot_id, path or ".", a))
             return f"Restored {r['restored']['id']} ({r['restored']['name']}) into {r['path']}."
+
+        @server.tool(annotations=ToolAnnotations(title="Preview a web app", destructive_hint=False))
+        async def preview_url(port: int, ctx: Context = None) -> str:
+            """Get a public HTTPS link to a server running in the sandbox on `port` (1024-65535).
+
+            Needs a long-running sandbox (MCP URL with ?persistent=1). Start the server in the
+            background and listening on 0.0.0.0 first, e.g.
+            `nohup python3 -m http.server 8000 > server.log 2>&1 &`. Anyone with the link can open it
+            while the sandbox is open.
+            """
+            r = await self._call(ctx, lambda t, s, a: ops.expose(t, s, int(port), a))
+            return f"Port {r['port']} is at {r['url']}"
 
         @server.tool(annotations=ToolAnnotations(title="Sandbox info", read_only_hint=True))
         async def sandbox_info(ctx: Context = None) -> str:

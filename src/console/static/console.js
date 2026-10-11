@@ -54,6 +54,7 @@ document.addEventListener("submit", (event) => {
   let position = history.length;
 
   const showPrompt = () => {
+    if (!prompt) return;
     const home = root.dataset.home;
     const shown = cwd === home ? "~" : cwd.startsWith(home + "/") ? "~" + cwd.slice(home.length) : cwd;
     prompt.textContent = `${shown}$`;
@@ -79,9 +80,11 @@ document.addEventListener("submit", (event) => {
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     return data;
   };
-  const busy = (on) => { form.querySelectorAll("input, button, select").forEach((el) => { el.disabled = on; }); };
+  const busy = (on) => { form?.querySelectorAll("input, button, select").forEach((el) => { el.disabled = on; }); };
 
-  form.addEventListener("submit", async (event) => {
+  // Long-running workspaces have the interactive terminal (terminal.js) instead of this
+  // line-at-a-time one; then this section is only a log for uploads and imports.
+  if (form) form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = input.value;
     if (!command.trim()) return;
@@ -116,7 +119,7 @@ document.addEventListener("submit", (event) => {
     }
   });
 
-  input.addEventListener("keydown", (event) => {
+  if (input) input.addEventListener("keydown", (event) => {
     if (event.key === "ArrowUp" && position > 0) {
       position -= 1; input.value = history[position]; event.preventDefault();
     } else if (event.key === "ArrowDown") {
@@ -128,7 +131,7 @@ document.addEventListener("submit", (event) => {
   });
 
   const importForm = document.getElementById("import-form");
-  importForm.addEventListener("submit", async (event) => {
+  importForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const fields = Object.fromEntries(new FormData(importForm));
     const button = importForm.querySelector("button");
@@ -146,7 +149,7 @@ document.addEventListener("submit", (event) => {
       line(`Import failed: ${error.message}`, "err");
     } finally {
       button.disabled = false;
-      input.focus();
+      input?.focus();
     }
   });
 
@@ -188,5 +191,5 @@ document.addEventListener("submit", (event) => {
   });
 
   showPrompt();
-  if (window.matchMedia("(min-width: 700px)").matches) input.focus({ preventScroll: true });
+  if (input && window.matchMedia("(min-width: 700px)").matches) input.focus({ preventScroll: true });
 })();

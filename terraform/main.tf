@@ -353,6 +353,7 @@ resource "aws_instance" "sandbox_host" {
     github_app_key       = local.github_app_enabled ? aws_ssm_parameter.github_app_private_key[0].name : ""
     tls_state_s3         = "s3://${aws_s3_bucket.artifacts.id}/tls/caddy"
     acme_email           = var.acme_email
+    preview_domain       = var.preview_domain
     audit_table          = aws_dynamodb_table.audit.name
     audit_retention_days = var.audit_retention_days
     notify_topic_arn     = aws_sns_topic.alerts.arn

@@ -191,3 +191,14 @@ td.cmd { min-width: 220px; }
 section.github { margin-top: 20px; }
 section.github .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 section.github .row form { margin: 0; }
+
+/* Long-running workspaces: the interactive terminal, previews, and the compact status log. */
+.xterm-wrap { margin-top: 20px; }
+#xterm { height: min(70vh, 560px); padding: 10px; border-radius: 10px; border: 1px solid #22302b; background: #0d1311; }
+.terminal.compact .term-output { max-height: 140px; min-height: 0; }
+details.previews { margin-top: 20px; padding: 12px 18px; }
+details.previews summary { cursor: pointer; font-weight: 600; }
+details.previews form.inline { margin: 12px 0 6px; }
+.previews-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.previews-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
+form.inline-mini { display: inline; margin: 0; }

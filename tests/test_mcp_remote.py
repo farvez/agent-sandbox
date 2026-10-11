@@ -14,7 +14,7 @@ from tests.test_sdk import KEY, api_url, fresh_state  # noqa: F401  (pytest fixt
 
 OTHER_KEY = TENANT_KEYS["globex"]
 TOOLS = ["run_command", "write_file", "read_file", "list_files", "import_repo", "egress_log", "activity",
-         "save_snapshot", "list_snapshots", "restore_snapshot", "sandbox_info", "reset_sandbox"]
+         "save_snapshot", "list_snapshots", "restore_snapshot", "preview_url", "sandbox_info", "reset_sandbox"]
 
 
 def call(url, steps, key=KEY, query=""):
@@ -147,3 +147,21 @@ def test_snapshot_tools(api_url, monkeypatch, tmp_path):
     assert saved.startswith("Saved snapshot snap_") and "first" in listed
     assert "into old" in restored and content == "print(1)"
     assert bad.is_error and "not found" in text(bad)
+
+
+def test_persistent_query_and_preview_url(api_url, monkeypatch):
+    monkeypatch.setattr(server, "PREVIEW_DOMAIN", "preview.test")
+
+    async def steps(c):
+        info = text(await c.call_tool("sandbox_info", {}))
+        link = await c.call_tool("preview_url", {"port": 8000})
+        return info, link, [r.persistent for r in server.active_sessions.values()]
+
+    info, link, kinds = call(api_url, steps, query="?persistent=1")
+    assert "Long-running: yes" in info and kinds == [True]
+    assert not link.is_error and ".preview.test" in text(link)
+    server.active_sessions.clear()
+
+    info, link, kinds = call(api_url, steps)
+    assert "Long-running: no" in info and kinds == [False]
+    assert link.is_error and "long-running" in text(link)

@@ -21,6 +21,10 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
       <label for="ref">Branch, tag or commit <span class="muted">(optional)</span></label>
       <input id="ref" name="ref" maxlength="200" placeholder="default branch" autocomplete="off" spellcheck="false">
     </div>
+    <label class="check">
+      <input type="checkbox" name="persistent" value="1" checked>
+      <span>Long-running <span class="muted">(an interactive terminal, background processes that keep running{% if previews_enabled %}, and preview links for web apps{% endif %}; up to {{ limits.limits.max_persistent_sessions }} at a time)</span></span>
+    </label>
     {% if egress %}
     <label class="check">
       <input type="checkbox" name="internet" value="1" checked>
@@ -69,7 +73,7 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
     <tbody>
     {% for w in workspaces %}
       <tr>
-        <td><a href="/console/workspaces/{{ w.session_id }}"><code>{{ w.session_id }}</code></a></td>
+        <td><a href="/console/workspaces/{{ w.session_id }}"><code>{{ w.session_id }}</code></a>{% if w.persistent %} <span class="pill ok">long-running</span>{% endif %}</td>
         <td class="hide-sm">{% if w.egress %}<span class="pill ok">{{ w.egress | length }} host{{ 's' if w.egress | length != 1 }}</span>{% else %}<span class="pill">none</span>{% endif %}</td>
         <td class="hide-sm"><time data-ts="{{ w.created_at }}">{{ w.created_at | int }}</time></td>
         <td class="hide-sm"><time data-ts="{{ w.expires_at }}">{{ w.expires_at | int }}</time></td>
@@ -106,6 +110,7 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
           <form method="post" action="/console/snapshots/{{ s.id }}/start">
             <input type="hidden" name="csrf" value="{{ session.csrf }}">
             {% if egress %}<input type="hidden" name="internet" value="1">{% endif %}
+            <input type="hidden" name="persistent" value="1">
             <button class="button primary" type="submit" data-busy="Starting…" title="Start a new workspace with these files">Start</button>
           </form>
           <form method="post" action="/console/snapshots/{{ s.id }}/delete" data-confirm="Delete snapshot “{{ s.name }}”? This can't be undone.">

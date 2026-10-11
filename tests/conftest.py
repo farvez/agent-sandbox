@@ -31,6 +31,9 @@ def make_offline_workspace() -> SandboxedWorkspace:
     ws.gateway = None
     ws.egress = None
     ws.pool = None
+    ws.session_container = None
+    ws.preview_token = "offlinepreview00"
+    ws.exposed_ports = []
     ws.quota_bytes = 512 * 1024 * 1024
     ws.workspace_dir = os.path.realpath(tempfile.mkdtemp(prefix="agent_workspace_test_"))
     return ws

@@ -32,6 +32,7 @@ GITHUB_APP_KEY_PARAM="${github_app_key}"
 DOMAIN="${domain_name}"
 TLS_STATE_S3="${tls_state_s3}"
 ACME_EMAIL="${acme_email}"
+PREVIEW_DOMAIN="${preview_domain}"
 AUDIT_TABLE="${audit_table}"
 AUDIT_RETENTION_DAYS="${audit_retention_days}"
 NOTIFY_TOPIC_ARN="${notify_topic_arn}"
@@ -199,6 +200,34 @@ fi
 echo "exec $APP_DIR/.venv/bin/python3 -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --proxy-headers" >> "$APP_DIR/start.sh"
 chmod 0755 "$APP_DIR/start.sh"
 
+# Sandboxes (and egress proxies) may not open connections to the host itself: Docker bridges
+# reach the host's own addresses (sshd and anything else listening), which no sandbox needs.
+# The host can still connect to sandboxes (previews), and replies to those connections pass.
+cat > /usr/local/sbin/airlock-hostguard <<'GUARD'
+#!/bin/sh
+for iface in 'br-+' docker0; do
+  iptables -C INPUT -i "$iface" -m conntrack --ctstate NEW -j DROP 2>/dev/null \
+    || iptables -I INPUT -i "$iface" -m conntrack --ctstate NEW -j DROP
+done
+GUARD
+chmod 0755 /usr/local/sbin/airlock-hostguard
+cat > /etc/systemd/system/airlock-hostguard.service <<'GUARD'
+[Unit]
+Description=Block new connections from sandbox networks to the host
+After=docker.service
+Before=agent-sandbox.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/airlock-hostguard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+GUARD
+systemctl daemon-reload
+systemctl enable --now airlock-hostguard
+
 cat > /etc/systemd/system/agent-sandbox.service <<EOF
 [Unit]
 Description=Agent Sandbox Execution API
@@ -304,15 +333,17 @@ apt-get install -y "/tmp/$CADDY_DEB"
 if [ -n "$DOMAIN" ]; then
   # Public certificate from Let's Encrypt (needs DNS pointing here and port 80 open).
   # With a contact email, Caddy falls back to ZeroSSL if Let's Encrypt refuses.
-  : > /etc/caddy/Caddyfile
-  if [ -n "$ACME_EMAIL" ]; then
-    cat > /etc/caddy/Caddyfile <<EOF
-{
-	email $ACME_EMAIL
-}
-
-EOF
-  fi
+  {
+    echo "{"
+    [ -n "$ACME_EMAIL" ] && printf '\temail %s\n' "$ACME_EMAIL"
+    if [ -n "$PREVIEW_DOMAIN" ]; then
+      # Preview hostnames get a certificate each, on first use, only if the API says the name
+      # is an open preview (so nobody can make us request certificates for arbitrary names).
+      printf '\ton_demand_tls {\n\t\task http://127.0.0.1:8000/internal/preview-allowed\n\t}\n'
+    fi
+    echo "}"
+    echo
+  } > /etc/caddy/Caddyfile
   cat >> /etc/caddy/Caddyfile <<EOF
 $DOMAIN {
 	reverse_proxy 127.0.0.1:8000 {
@@ -321,6 +352,22 @@ $DOMAIN {
 	}
 }
 EOF
+  if [ -n "$PREVIEW_DOMAIN" ]; then
+    # <port>-<token>.$PREVIEW_DOMAIN → the API, which proxies to the session (src/api/previews.py).
+    cat >> /etc/caddy/Caddyfile <<EOF
+
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1
+		lb_try_duration 30s
+		lb_try_interval 250ms
+	}
+}
+EOF
+  fi
 else
   # No domain: self-signed certificate for the Elastic IP (clients need -k or to trust Caddy's CA)
   PUBLIC_IP="${public_ip}"

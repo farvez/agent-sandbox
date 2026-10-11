@@ -15,13 +15,53 @@ AUTH = {"X-API-Key": TENANT_KEYS["acme"]}
 OTHER_TENANT = {"X-API-Key": TENANT_KEYS["globex"]}
 
 
+class FakePty:
+    """Echoes input back, like a terminal with echo on; "exit" ends it."""
+
+    def __init__(self, rows, cols):
+        import queue
+        self.size = (rows, cols)
+        self.out = queue.Queue()
+        self.out.put(f"$ [{rows}x{cols}] ".encode())
+        self.closed = False
+
+    def read(self, size=65536):
+        return self.out.get()
+
+    def write(self, data):
+        if data.strip() == b"exit":
+            self.out.put(b"")
+        else:
+            self.out.put(b"echo:" + data)
+
+    def resize(self, rows, cols):
+        self.size = (rows, cols)
+        self.out.put(f"[resized {rows}x{cols}]".encode())
+
+    def close(self):
+        self.closed = True
+        self.out.put(b"")
+
+
+class FakeSessionContainer:
+    ip = "127.0.0.1"
+
+    def ip_address(self):
+        return self.ip
+
+    def open_pty(self, rows=24, cols=80):
+        self.pty = FakePty(rows, cols)
+        return self.pty
+
+
 class FakeWorkspace:
     """Real host-side file handling, fake container execution."""
 
     exec_delay = 0.0
     capacity_left = None   # None = unlimited; an int counts down to a 503
 
-    def __init__(self, base_image="sandbox-base:latest", egress=None, session_id=None, tenant_id="local"):
+    def __init__(self, base_image="sandbox-base:latest", egress=None, session_id=None, tenant_id="local",
+                 persistent=False):
         if FakeWorkspace.capacity_left is not None:
             if FakeWorkspace.capacity_left <= 0:
                 raise WorkspaceCapacityError("All sandbox workspaces are in use; try again shortly.")
@@ -32,10 +72,19 @@ class FakeWorkspace:
         self.egress = egress or []
         self.session_id, self.tenant_id = session_id, tenant_id
         self.cleaned = False
+        self.session_container = FakeSessionContainer() if persistent else None
+        self.preview_token = os.urandom(8).hex()
+        self.exposed_ports = []
+
+    @property
+    def persistent(self):
+        return self.session_container is not None
 
     def state(self):
         return {"session_id": self.session_id, "tenant_id": self.tenant_id, "workspace_dir": self.workspace_dir,
-                "quota_bytes": self.quota_bytes, "egress_rules": list(self.egress), "egress": None}
+                "quota_bytes": self.quota_bytes, "egress_rules": list(self.egress), "egress": None,
+                "persistent": self.persistent, "preview_token": self.preview_token,
+                "exposed_ports": list(self.exposed_ports)}
 
     @classmethod
     def restore(cls, state):
@@ -46,6 +95,8 @@ class FakeWorkspace:
         ws._ws.workspace_dir = ws.workspace_dir = state["workspace_dir"]
         ws.quota_bytes, ws.egress = state["quota_bytes"], state["egress_rules"]
         ws.session_id, ws.tenant_id, ws.cleaned = state["session_id"], state["tenant_id"], False
+        ws.session_container = FakeSessionContainer() if state.get("persistent") else None
+        ws.preview_token, ws.exposed_ports = state.get("preview_token", "0" * 16), list(state.get("exposed_ports", []))
         return ws
 
     def write_file(self, path, content):

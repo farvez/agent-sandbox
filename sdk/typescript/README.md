@@ -58,6 +58,14 @@ const report = await sbx.files.download("out/report.csv");            // Uint8Ar
 const archive = await sbx.files.downloadArchive("out");               // a folder as .tar.gz bytes
 ```
 
+## Long-running sandboxes and previews
+
+```ts
+await using app = await Sandbox.create({ persistent: true });
+await app.run("nohup python3 -m http.server 8000 > server.log 2>&1 &");
+console.log(await app.expose(8000));   // https://8000-<token>.<preview domain>
+```
+
 ## Snapshots
 
 ```ts

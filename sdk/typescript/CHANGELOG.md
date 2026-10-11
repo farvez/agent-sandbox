@@ -2,6 +2,13 @@
 
 All notable changes to `airlock-sandbox` on npm, the TypeScript SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.3.0 — 2026-10-11
+
+- Long-running sandboxes: `Sandbox.create({ persistent: true })` keeps one container for the whole
+  session, so background processes keep running between commands.
+- Previews: `sbx.expose(port)` returns a public HTTPS link to a server in a long-running sandbox;
+  `sbx.unexpose(port)` closes it.
+
 ## 0.2.0 — 2026-10-11
 
 - Binary files: `sbx.files.upload(path, data)` (`Uint8Array` or string), `sbx.files.download(path)`

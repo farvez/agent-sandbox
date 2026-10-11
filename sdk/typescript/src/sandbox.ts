@@ -25,6 +25,11 @@ export interface SandboxOptions {
   fetch?: typeof fetch;
   /** Id of a saved snapshot to restore into the new session's /workspace. */
   snapshot?: string;
+  /**
+   * Keep one container running for the whole session: background processes (servers, workers)
+   * survive between commands, and ports can be previewed with expose().
+   */
+  persistent?: boolean;
 }
 
 export interface RunOptions {
@@ -154,6 +159,7 @@ export class Sandbox {
   egress: string[] = [];
   diskQuotaMb?: number;
   readonly snapshotId?: string;
+  persistent: boolean;
   private readonly http: HttpClient;
 
   constructor(options: SandboxOptions = {}) {
@@ -170,6 +176,7 @@ export class Sandbox {
     this.template = options.template ?? DEFAULT_TEMPLATE;
     this.requestedEgress = [...(options.egress ?? [])];
     this.snapshotId = options.snapshot;
+    this.persistent = Boolean(options.persistent);
   }
 
   /** Creates and starts a sandbox. Remember to close() it, or use `await using`. */
@@ -194,12 +201,14 @@ export class Sandbox {
     if (this.sessionId) return this;
     const body: Record<string, unknown> = { template: this.template, egress: this.requestedEgress };
     if (this.snapshotId) body.snapshot_id = this.snapshotId;
+    if (this.persistent) body.persistent = true;
     const data = await this.http.request("POST", "/v1/sessions", body,
       this.snapshotId ? { timeoutMs: this.longTimeoutMs(240_000) } : {});
     this.sessionId = data.session_id;
     this.tenantId = data.tenant_id;
     this.egress = data.egress ?? [];
     this.diskQuotaMb = data.disk_quota_mb;
+    this.persistent = Boolean(data.persistent ?? this.persistent);
     return this;
   }
 
@@ -237,6 +246,17 @@ export class Sandbox {
   /** Every outbound connection this session attempted, allowed or denied. */
   async egressLog(limit = 200): Promise<Record<string, unknown>[]> {
     return (await this.call<{ events: Record<string, unknown>[] }>("GET", `/egress?limit=${Math.trunc(limit)}`)).events;
+  }
+
+  // ------------------------------------------------------------------ previews (long-running sandboxes)
+
+  /** A public preview URL for a server listening on `port` (0.0.0.0) in this long-running sandbox. */
+  async expose(port: number): Promise<string> {
+    return (await this.call<{ url: string }>("POST", "/previews", { port: Math.trunc(port) })).url;
+  }
+
+  async unexpose(port: number): Promise<void> {
+    await this.call("DELETE", `/previews/${Math.trunc(port)}`);
   }
 
   // ------------------------------------------------------------------ snapshots

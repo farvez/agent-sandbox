@@ -49,12 +49,13 @@ class FakeSessions:
     def get(self, tenant, sid):
         return self._owned(tenant, sid)
 
-    def create(self, tenant, egress):
+    def create(self, tenant, egress, persistent=False):
         self._check()
         sid = f"sbx_{len(self.sessions) + 1:012d}"
         self.sessions[sid] = {"session_id": sid, "tenant_id": tenant, "egress": egress, "created_at": 1.0,
-                              "last_accessed_at": 1.0, "expires_at": 1801.0, "disk_quota_mb": 512}
-        self.calls.append(("create", tenant, egress))
+                              "last_accessed_at": 1.0, "expires_at": 1801.0, "disk_quota_mb": 512,
+                              "persistent": persistent, "previews": []}
+        self.calls.append(("create", tenant, egress) + (("persistent",) if persistent else ()))
         return self.sessions[sid]
 
     def run(self, tenant, sid, command, timeout, actor=None, audit_command=None):
@@ -115,12 +116,38 @@ class FakeSessions:
     def snapshots(self, tenant):
         return [s for s in getattr(self, "saved", []) if s["tenant"] == tenant]
 
-    def create_from_snapshot(self, tenant, egress, snapshot_id, actor=None):
+    def create_from_snapshot(self, tenant, egress, snapshot_id, actor=None, persistent=False):
         if not any(s["id"] == snapshot_id for s in self.snapshots(tenant)):
             raise HTTPException(404, f"Snapshot {snapshot_id} not found.")
-        created = self.create(tenant, egress)
+        created = self.create(tenant, egress, persistent)
         self.calls.append(("restore", created["session_id"], snapshot_id))
         return created
+
+    previews_enabled = True
+
+    def expose(self, tenant, sid, port, actor=None):
+        rec = self._owned(tenant, sid)
+        if not rec["persistent"]:
+            raise HTTPException(409, "Previews needs a long-running session.")
+        url = f"https://{port}-0123456789abcdef.preview.test"
+        rec["previews"].append({"port": port, "url": url})
+        return {"port": port, "url": url}
+
+    def unexpose(self, tenant, sid, port, actor=None):
+        rec = self._owned(tenant, sid)
+        rec["previews"] = [p for p in rec["previews"] if p["port"] != port]
+
+    async def terminal(self, websocket, tenant, sid, actor=None):
+        rec = self.sessions.get(sid)
+        if rec is None or rec["tenant_id"] != tenant or not rec["persistent"]:
+            await websocket.close(1008)
+            return
+        await websocket.accept()
+        self.terminal_actor = actor
+        await websocket.send_bytes(b"$ ")
+        data = await websocket.receive_bytes()
+        await websocket.send_bytes(b"echo:" + data)
+        await websocket.close(1000)
 
     def delete_snapshot(self, tenant, snapshot_id):
         mine = [s for s in self.snapshots(tenant) if s["id"] == snapshot_id]
@@ -400,3 +427,59 @@ def test_snapshot_then_start_from_it_and_delete(console):
 
     assert client.post("/console/snapshots/snap_0123456789ab/delete", data={"csrf": csrf}).status_code == 303
     assert "snap_0123456789ab" not in client.get("/console/workspaces").text
+
+
+
+# ---------------------------------------------------------------- long-running workspaces
+
+
+def test_long_running_checkbox_and_interactive_page(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf, persistent="1")
+    assert sessions.calls[-1] == ("create", "u1", [], "persistent") or sessions.calls[-1][-1] == "persistent"
+    page = client.get(f"/console/workspaces/{sid}")
+    assert 'id="xterm"' in page.text and "vendor/xterm.js" in page.text and 'id="term-form"' not in page.text
+    assert "'unsafe-inline'" in page.headers["content-security-policy"]
+    assert "script-src 'self';" in page.headers["content-security-policy"]
+    assert "Long-running" in client.get("/console/workspaces").text
+
+    regular, _ = start(client, csrf)
+    page = client.get(f"/console/workspaces/{regular}")
+    assert 'id="term-form"' in page.text and 'id="xterm"' not in page.text
+    assert "'unsafe-inline'" not in page.headers["content-security-policy"]
+
+
+def test_terminal_websocket_checks_origin_and_csrf(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf, persistent="1")
+    good = {"Origin": "https://console.test"}
+    with client.websocket_connect(f"wss://console.test/console/workspaces/{sid}/terminal?csrf={csrf}", headers=good) as ws:
+        assert ws.receive_bytes() == b"$ "
+        ws.send_bytes(b"ls\r")
+        assert ws.receive_bytes() == b"echo:ls\r"
+    assert sessions.terminal_actor.startswith("console @")
+    for url, headers in ((f"wss://console.test/console/workspaces/{sid}/terminal?csrf={csrf}", {"Origin": "https://evil.test"}),
+                         (f"wss://console.test/console/workspaces/{sid}/terminal?csrf={csrf}", {}),
+                         (f"wss://console.test/console/workspaces/{sid}/terminal?csrf=wrong", good)):
+        with pytest.raises(Exception):
+            with client.websocket_connect(url, headers=headers) as ws:
+                ws.receive_bytes()
+    client.cookies.clear()
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"wss://console.test/console/workspaces/{sid}/terminal?csrf={csrf}", headers=good) as ws:
+            ws.receive_bytes()
+
+
+def test_previews_expose_and_close(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf, persistent="1")
+    res = client.post(f"/console/workspaces/{sid}/previews", data={"csrf": csrf, "port": "8000"})
+    assert res.status_code == 303
+    page = client.get(f"/console/workspaces/{sid}").text
+    assert "https://8000-0123456789abcdef.preview.test" in page
+    assert client.post(f"/console/workspaces/{sid}/previews", data={"csrf": csrf, "port": "abc"}).status_code == 303
+    client.post(f"/console/workspaces/{sid}/previews/8000/close", data={"csrf": csrf})
+    assert "https://8000-0123456789abcdef.preview.test" not in client.get(f"/console/workspaces/{sid}").text
+    regular, _ = start(client, csrf)
+    res = client.post(f"/console/workspaces/{regular}/previews", data={"csrf": csrf, "port": "8000"})
+    assert res.status_code == 303      # flashed error: needs a long-running session

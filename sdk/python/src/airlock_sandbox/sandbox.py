@@ -148,6 +148,9 @@ class Sandbox:
         max_retries: retries for rate limits (429), full servers (503) and
             dropped connections on idempotent calls.
         snapshot: id of a saved snapshot to restore into the new session's /workspace.
+        persistent: keep one container running for the whole session, so background
+            processes (servers, workers) survive between commands and ports can be
+            previewed with expose(). Tenants can run only a few at a time.
     """
 
     def __init__(
@@ -161,6 +164,7 @@ class Sandbox:
         timeout: float = 90,
         max_retries: int = 3,
         snapshot: Optional[str] = None,
+        persistent: bool = False,
     ):
         base_url = base_url or os.getenv("SANDBOX_API_URL")
         api_key = api_key or os.getenv("SANDBOX_API_KEY")
@@ -176,6 +180,7 @@ class Sandbox:
         self.template = template
         self.requested_egress = list(egress or [])
         self.snapshot_id = snapshot
+        self.persistent = persistent
         self.files = Files(self)
         self.session_id: Optional[str] = None
         self.tenant_id: Optional[str] = None
@@ -202,12 +207,15 @@ class Sandbox:
         body = {"template": self.template, "egress": self.requested_egress}
         if self.snapshot_id:
             body["snapshot_id"] = self.snapshot_id
+        if self.persistent:
+            body["persistent"] = True
         data = self._http.request("POST", "/v1/sessions", body,
                                   timeout=max(self._http.timeout, 240) if self.snapshot_id else None)
         self.session_id = data["session_id"]
         self.tenant_id = data.get("tenant_id")
         self.egress = data.get("egress", [])
         self.disk_quota_mb = data.get("disk_quota_mb")
+        self.persistent = bool(data.get("persistent", self.persistent))
         return self
 
     def close(self, timeout: Optional[float] = None) -> None:
@@ -260,6 +268,15 @@ class Sandbox:
     def egress_log(self, limit: int = 200) -> List[dict]:
         """Every outbound connection this session attempted, allowed or denied."""
         return self._call("GET", f"/egress?limit={int(limit)}")["events"]
+
+    def expose(self, port: int) -> str:
+        """Returns a public preview URL for a server listening on `port` (0.0.0.0) in this
+        long-running sandbox. Anyone with the URL can open it until the sandbox closes or
+        unexpose(port). Needs persistent=True and a server with previews enabled."""
+        return self._call("POST", "/previews", {"port": int(port)})["url"]
+
+    def unexpose(self, port: int) -> None:
+        self._call("DELETE", f"/previews/{int(port)}")
 
     def snapshot(self, name: Optional[str] = None, path: str = ".") -> dict:
         """Saves /workspace (or one folder) as a snapshot that outlives this session.

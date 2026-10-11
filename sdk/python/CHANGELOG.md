@@ -2,6 +2,13 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.7.0 — 2026-10-11
+
+- Long-running sandboxes: `Sandbox(persistent=True)` keeps one container for the whole session,
+  so background processes (servers, workers) keep running between commands.
+- Previews: `sbx.expose(port)` returns a public HTTPS link to a server in a long-running
+  sandbox; `sbx.unexpose(port)` closes it.
+
 ## 0.6.0 — 2026-10-11
 
 - Binary files: `sbx.files.upload(path, data)` (bytes or str), `sbx.files.download(path)` (bytes),

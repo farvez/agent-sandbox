@@ -13,7 +13,7 @@ from src.api import runtime_config
 
 runtime_config.apply()  # before anything below reads its settings from the environment
 
-from fastapi import FastAPI, HTTPException, Request, Security, status
+from fastapi import FastAPI, HTTPException, Request, Security, WebSocket, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +30,7 @@ from src.egress.gateway import shutdown_gateway
 from src.egress.proxy import expand_rules, rule_covered
 from src.api.repos import RepoImportError, clean_destination, fetch_archive, import_archive, parse_repo
 from src.api.snapshots import SnapshotError, SnapshotStore
+from src.api import previews, terminal_ws
 from src.sandbox.files import WorkspaceFileError
 from src.sandbox.workspace import SandboxedWorkspace, format_result
 from src.sandbox.workspace_pool import QuotaExceededError, WorkspaceCapacityError, get_pool
@@ -122,6 +123,10 @@ AUDIT = AuditLog.from_config(os.getenv("SANDBOX_AUDIT"), region=os.getenv("AWS_R
 # Workspace snapshots (optional; see src/api/snapshots.py) and file transfer limits.
 SNAPSHOTS = SnapshotStore.from_config(os.getenv("SANDBOX_SNAPSHOTS"), region=os.getenv("AWS_REGION"))
 UPLOAD_MAX_BYTES = int(os.getenv("SANDBOX_UPLOAD_MAX_MB", "50")) * 2**20
+# Long-running sessions on this host at once (each keeps a 256 MB container), and the domain
+# preview URLs live under (unset = previews off).
+MAX_PERSISTENT_SESSIONS = int(os.getenv("SANDBOX_MAX_PERSISTENT_SESSIONS", "8"))
+PREVIEW_DOMAIN = (os.getenv("SANDBOX_PREVIEW_DOMAIN") or "").strip().lower().rstrip(".")
 DOWNLOAD_MAX_BYTES = int(os.getenv("SANDBOX_DOWNLOAD_MAX_MB", "100")) * 2**20
 
 
@@ -188,6 +193,9 @@ class CreateSessionRequest(BaseModel):
     )
     snapshot_id: Optional[str] = Field(default=None, max_length=40,
                                        description="Start with this snapshot's files restored into /workspace")
+    persistent: bool = Field(default=False, description="Keep one container running for the whole session: "
+                             "background processes survive between commands, and the session gets an "
+                             "interactive terminal and preview URLs")
 
 
 class CreateSessionResponse(BaseModel):
@@ -197,6 +205,11 @@ class CreateSessionResponse(BaseModel):
     disk_quota_mb: int
     created_at: float
     status: str
+    persistent: bool = False
+
+
+class ExposePortRequest(BaseModel):
+    port: int = Field(..., ge=previews.MIN_PORT, le=previews.MAX_PORT, description="Port the session's server listens on")
 
 
 class WriteFileRequest(BaseModel):
@@ -262,7 +275,19 @@ class SessionRecord:
             "last_accessed_at": self.last_accessed_at,
             "expires_at": self.last_accessed_at + SESSION_TTL_SECONDS,
             "disk_quota_mb": self.workspace.quota_bytes // 2**20,
+            "persistent": bool(getattr(self.workspace, "persistent", False)),
+            "previews": self.previews(),
         }
+
+    def previews(self) -> List[dict]:
+        if not PREVIEW_DOMAIN:
+            return []
+        return [{"port": port, "url": previews.preview_url(PREVIEW_DOMAIN, port, self.workspace.preview_token)}
+                for port in getattr(self.workspace, "exposed_ports", [])]
+
+    @property
+    def persistent(self) -> bool:
+        return bool(getattr(self.workspace, "persistent", False))
 
 
 active_sessions: Dict[str, SessionRecord] = {}
@@ -279,7 +304,7 @@ def reap_expired_sessions() -> None:
         ]
     for rec in expired:
         rec.workspace.cleanup()
-        LIMITS.close_session(rec.tenant_id)
+        LIMITS.close_session(rec.tenant_id, persistent=rec.persistent)
     persist_sessions()
 
 
@@ -329,7 +354,7 @@ def restore_sessions() -> int:
         for rec in restored:
             active_sessions[rec.session_id] = rec
     for rec in restored:
-        LIMITS.restore_session(rec.tenant_id)
+        LIMITS.restore_session(rec.tenant_id, persistent=rec.persistent)
     persist_sessions()
     return len(restored)
 
@@ -349,6 +374,7 @@ async def lifespan(app: FastAPI):
     if SESSION_STATE_PATH:
         restored = await asyncio.to_thread(restore_sessions)
         logger.info("Restored %d session(s) after restart", restored)
+        await asyncio.to_thread(prune_session_containers)
     sweeper_task = asyncio.create_task(session_ttl_sweeper())
     async with AsyncExitStack() as stack:
         if REMOTE_MCP is not None:
@@ -367,7 +393,7 @@ async def lifespan(app: FastAPI):
         active_sessions.clear()
     for rec in remaining:
         rec.workspace.cleanup()
-        LIMITS.close_session(rec.tenant_id)
+        LIMITS.close_session(rec.tenant_id, persistent=rec.persistent)
     shutdown_gateway()
 
 
@@ -433,8 +459,27 @@ def get_authorized_session(session_id: str, tenant_id: str) -> SessionRecord:
 # Shared by the REST API (API-key auth) and the console (GitHub sign-in): callers
 # authenticate and rate-limit first, then pass the tenant in.
 
+def prune_session_containers() -> None:
+    """Long-running session containers left by an earlier process that weren't taken back."""
+    try:
+        import docker
+
+        from src.sandbox.session_container import prune_orphans
+
+        with sessions_lock:
+            keep = {sid for sid, rec in active_sessions.items() if rec.persistent}
+        prune_orphans(docker.from_env(), keep)
+    except Exception:
+        logger.exception("Pruning old session containers failed")
+
+
+def persistent_sessions_open() -> int:
+    with sessions_lock:
+        return sum(1 for rec in active_sessions.values() if rec.persistent)
+
+
 def start_session(tenant_id: str, template: str = "sandbox-base:latest",
-                  egress_request: Optional[List[str]] = None) -> SessionRecord:
+                  egress_request: Optional[List[str]] = None, persistent: bool = False) -> SessionRecord:
     if template not in ALLOWED_TEMPLATES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -450,17 +495,21 @@ def start_session(tenant_id: str, template: str = "sandbox-base:latest",
             detail=f"Egress not permitted for this tenant: {refused}. Allowed: {allowed}",
         )
 
-    LIMITS.open_session(tenant_id)  # 429 when the tenant is at its session limit
+    if persistent and persistent_sessions_open() >= MAX_PERSISTENT_SESSIONS:
+        raise HTTPException(status_code=503, detail="The server is running as many long-running sessions as it can; "
+                                                    "try again shortly, or start a regular session.")
+    LIMITS.open_session(tenant_id, persistent=persistent)  # 429 when the tenant is at a session limit
     session_id = f"sbx_{uuid.uuid4().hex[:12]}"
+    kwargs = {"persistent": True} if persistent else {}
     try:
         workspace = SandboxedWorkspace(
-            base_image=template, egress=egress, session_id=session_id, tenant_id=tenant_id
+            base_image=template, egress=egress, session_id=session_id, tenant_id=tenant_id, **kwargs
         )
     except WorkspaceCapacityError as e:
-        LIMITS.close_session(tenant_id)
+        LIMITS.close_session(tenant_id, persistent=persistent)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
     except Exception:
-        LIMITS.close_session(tenant_id)
+        LIMITS.close_session(tenant_id, persistent=persistent)
         raise
 
     rec = SessionRecord(session_id=session_id, workspace=workspace, tenant_id=tenant_id, egress=egress)
@@ -588,6 +637,49 @@ def restore_snapshot(rec: SessionRecord, snapshot_id: str, path: str = ".", acto
     return {"restored": meta, "path": path or "."}
 
 
+def require_persistent(rec: SessionRecord, feature: str) -> None:
+    if not rec.persistent:
+        raise HTTPException(status_code=409, detail=f"{feature} needs a long-running session: "
+                                                    "create the session with \"persistent\": true.")
+
+
+def expose_port(rec: SessionRecord, port: int, actor: str = "api") -> dict:
+    require_persistent(rec, "Previews")
+    if not PREVIEW_DOMAIN:
+        raise HTTPException(status_code=501, detail="Previews are not enabled on this server (SANDBOX_PREVIEW_DOMAIN).")
+    if not previews.MIN_PORT <= port <= previews.MAX_PORT:
+        raise HTTPException(status_code=422, detail=f"Ports {previews.MIN_PORT}-{previews.MAX_PORT} can be previewed.")
+    ports = rec.workspace.exposed_ports
+    if port not in ports:
+        if len(ports) >= 5:
+            raise HTTPException(status_code=409, detail="A session can expose at most 5 ports.")
+        ports.append(port)
+        persist_sessions()
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="preview",
+                     command=f"expose port {port}", exit_code=0)
+    return {"port": port, "url": previews.preview_url(PREVIEW_DOMAIN, port, rec.workspace.preview_token)}
+
+
+def unexpose_port(rec: SessionRecord, port: int, actor: str = "api") -> None:
+    if port in getattr(rec.workspace, "exposed_ports", []):
+        rec.workspace.exposed_ports.remove(port)
+        persist_sessions()
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="preview",
+                     command=f"unexpose port {port}", exit_code=0)
+
+
+def resolve_preview(port: int, token: str) -> Optional[str]:
+    """Upstream URL for an open, exposed preview (and keeps its session alive), else None."""
+    with sessions_lock:
+        rec = next((r for r in active_sessions.values()
+                    if r.persistent and secrets.compare_digest(r.workspace.preview_token, token)), None)
+        if rec is None or port not in rec.workspace.exposed_ports:
+            return None
+        rec.touch()
+    ip = rec.workspace.session_container.ip_address()
+    return f"http://{ip}:{port}" if ip else None
+
+
 def end_session(session_id: str, tenant_id: str) -> None:
     with sessions_lock:
         rec = active_sessions.get(session_id)
@@ -598,7 +690,7 @@ def end_session(session_id: str, tenant_id: str) -> None:
         active_sessions.pop(session_id, None)
 
     rec.workspace.cleanup()
-    LIMITS.close_session(tenant_id)
+    LIMITS.close_session(tenant_id, persistent=rec.persistent)
     persist_sessions()
 
 
@@ -635,7 +727,7 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
             require_snapshots().meta(tenant_id, request.snapshot_id)
         except SnapshotError as e:
             raise HTTPException(status_code=e.status, detail=str(e))
-    rec = start_session(tenant_id, request.template, request.egress)
+    rec = start_session(tenant_id, request.template, request.egress, persistent=request.persistent)
     if request.snapshot_id:
         try:
             restore_snapshot(rec, request.snapshot_id, actor=actor_for_key(header_key))
@@ -649,6 +741,7 @@ def create_session(request: CreateSessionRequest, tenant_id: str = Security(auth
         disk_quota_mb=rec.workspace.quota_bytes // 2**20,
         created_at=rec.created_at,
         status="ready",
+        persistent=rec.persistent,
     )
 
 
@@ -870,6 +963,80 @@ def delete_snapshot(snapshot_id: str, tenant_id: str = Security(authorize)):
         raise HTTPException(status_code=e.status, detail=str(e))
 
 
+@app.post("/v1/sessions/{session_id}/previews")
+def expose(session_id: str, request: ExposePortRequest, tenant_id: str = Security(authorize),
+           header_key: Optional[str] = Security(api_key_header)):
+    """Gives a port the session listens on a public preview URL (long-running sessions only).
+    Anyone with the URL can open it while the session is open; the server must listen on 0.0.0.0."""
+    return expose_port(get_authorized_session(session_id, tenant_id), request.port, actor=actor_for_key(header_key))
+
+
+@app.delete("/v1/sessions/{session_id}/previews/{port}")
+def unexpose(session_id: str, port: int, tenant_id: str = Security(authorize),
+             header_key: Optional[str] = Security(api_key_header)):
+    unexpose_port(get_authorized_session(session_id, tenant_id), port, actor=actor_for_key(header_key))
+    return {"port": port, "status": "closed"}
+
+
+@app.get("/internal/preview-allowed", include_in_schema=False)
+def preview_allowed(request: Request, domain: str = ""):
+    """Caddy's on-demand TLS check: may it get a certificate for this hostname? Only answers Caddy
+    itself (a direct local request; proxied requests carry X-Forwarded-For)."""
+    direct = request.client is not None and request.client.host in ("127.0.0.1", "::1") \
+        and "x-forwarded-for" not in request.headers
+    target = previews.parse_host(domain, PREVIEW_DOMAIN)
+    if not direct or target is None:
+        raise HTTPException(status_code=404)
+    with sessions_lock:
+        ok = any(r.persistent and secrets.compare_digest(r.workspace.preview_token, target[1])
+                 and target[0] in r.workspace.exposed_ports for r in active_sessions.values())
+    if not ok:
+        raise HTTPException(status_code=404)
+    return {"ok": True}
+
+
+async def open_terminal(websocket: WebSocket, rec: SessionRecord, actor: str) -> None:
+    """Accepts the socket and runs a shell in the session until either side ends."""
+    rows = int(websocket.query_params.get("rows", 24) or 24)
+    cols = int(websocket.query_params.get("cols", 80) or 80)
+    try:
+        pty = await asyncio.to_thread(rec.workspace.session_container.open_pty, rows, cols)
+    except Exception:
+        logger.exception("Opening a terminal failed")
+        await websocket.close(1011)
+        return
+    await websocket.accept()
+    started = time.monotonic()
+    record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="terminal", command="open terminal")
+    try:
+        await terminal_ws.bridge(websocket, pty, on_input=rec.touch)
+    finally:
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="terminal", command="close terminal",
+                     duration_s=round(time.monotonic() - started, 3))
+
+
+@app.websocket("/v1/sessions/{session_id}/terminal")
+async def terminal(websocket: WebSocket, session_id: str):
+    """Interactive bash on a PTY in a long-running session (protocol: src/api/terminal_ws.py).
+    Authenticate with the X-API-Key header (or Authorization: Bearer)."""
+    key = websocket.headers.get("x-api-key") or ""
+    auth = websocket.headers.get("authorization") or ""
+    if not key and auth.lower().startswith("bearer "):
+        key = auth[7:].strip()
+    tenant_id = tenant_for_key(key) if key else None
+    if tenant_id is None:
+        await websocket.close(1008)
+        return
+    try:
+        LIMITS.check_rate(tenant_id)
+        rec = get_authorized_session(session_id, tenant_id)
+        require_persistent(rec, "The interactive terminal")
+    except (HTTPException, LimitExceeded):
+        await websocket.close(1008)
+        return
+    await open_terminal(websocket, rec, actor_for_key(key))
+
+
 @app.get("/v1/audit")
 def audit_log(limit: int = 100, before: Optional[str] = None, tenant_id: str = Security(authorize)):
     """This tenant's command history, newest first: commands and outcomes, never output.
@@ -910,8 +1077,12 @@ class McpOps:
             raise AuthError(429, str(e), e.retry_after)
 
     @staticmethod
-    def start(tenant_id: str, egress: List[str]) -> str:
-        return start_session(tenant_id, egress_request=egress).session_id
+    def start(tenant_id: str, egress: List[str], persistent: bool = False) -> str:
+        return start_session(tenant_id, egress_request=egress, persistent=persistent).session_id
+
+    @staticmethod
+    def expose(tenant_id: str, session_id: str, port: int, actor: str) -> dict:
+        return expose_port(get_authorized_session(session_id, tenant_id), port, actor=actor)
 
     @staticmethod
     def exists(tenant_id: str, session_id: str) -> bool:
@@ -971,6 +1142,7 @@ class McpOps:
         return "\n".join([
             f"Session: {session_id} (tenant {tenant_id})",
             f"Internet: {', '.join(rec.egress) if rec.egress else 'none'}",
+            f"Long-running: {'yes (background processes keep running; preview_url works)' if rec.persistent else 'no (add ?persistent=1 to the MCP URL)'}",
             f"Allowed to request: {', '.join(tenant_egress(tenant_id)) or 'nothing'} (add ?egress=… to the MCP URL)",
             f"Disk quota: {rec.workspace.quota_bytes // 2**20} MB",
             f"Limits: {limits.get('max_sessions')} sessions, {limits.get('requests_per_minute')} requests/min, "
@@ -999,6 +1171,10 @@ if REMOTE_MCP is not None:
     app.router.routes.append(Route("/mcp", endpoint=REMOTE_MCP, methods=["GET", "POST", "DELETE"]))
 
 
+# Preview hostnames (<port>-<token>.<SANDBOX_PREVIEW_DOMAIN>) are proxied before routing.
+app.add_middleware(previews.PreviewMiddleware, domain=lambda: PREVIEW_DOMAIN, resolve=resolve_preview)
+
+
 # ------------------------------------------------------------------ developer console
 
 from src.console.routes import ConsoleConfig, build_console_router  # noqa: E402  (after the API is defined)
@@ -1014,9 +1190,9 @@ class ConsoleSessions:
     def get(self, tenant_id: str, session_id: str) -> dict:
         return get_authorized_session(session_id, tenant_id).summary()
 
-    def create(self, tenant_id: str, egress: List[str]) -> dict:
+    def create(self, tenant_id: str, egress: List[str], persistent: bool = False) -> dict:
         LIMITS.check_rate(tenant_id)
-        return start_session(tenant_id, egress_request=egress).summary()
+        return start_session(tenant_id, egress_request=egress, persistent=persistent).summary()
 
     def run(self, tenant_id: str, session_id: str, command: str, timeout_seconds: int,
             actor: str = "console", audit_command: Optional[str] = None) -> dict:
@@ -1061,19 +1237,44 @@ class ConsoleSessions:
     def snapshots(self, tenant_id: str) -> List[dict]:
         return SNAPSHOTS.list(tenant_id) if SNAPSHOTS is not None else []
 
-    def create_from_snapshot(self, tenant_id: str, egress: List[str], snapshot_id: str, actor: str = "console") -> dict:
+    def create_from_snapshot(self, tenant_id: str, egress: List[str], snapshot_id: str, actor: str = "console",
+                             persistent: bool = False) -> dict:
         LIMITS.check_rate(tenant_id)
         try:
             require_snapshots().meta(tenant_id, snapshot_id)
         except SnapshotError as e:
             raise HTTPException(status_code=e.status, detail=str(e))
-        rec = start_session(tenant_id, egress_request=egress)
+        rec = start_session(tenant_id, egress_request=egress, persistent=persistent)
         try:
             restore_snapshot(rec, snapshot_id, actor=actor)
         except Exception:
             end_session(rec.session_id, tenant_id)
             raise
         return rec.summary()
+
+    # Long-running sessions: previews and the interactive terminal.
+    @property
+    def previews_enabled(self) -> bool:
+        return bool(PREVIEW_DOMAIN)
+
+    def expose(self, tenant_id: str, session_id: str, port: int, actor: str = "console") -> dict:
+        LIMITS.check_rate(tenant_id)
+        return expose_port(get_authorized_session(session_id, tenant_id), port, actor=actor)
+
+    def unexpose(self, tenant_id: str, session_id: str, port: int, actor: str = "console") -> None:
+        LIMITS.check_rate(tenant_id)
+        unexpose_port(get_authorized_session(session_id, tenant_id), port, actor=actor)
+
+    async def terminal(self, websocket: WebSocket, tenant_id: str, session_id: str, actor: str = "console") -> None:
+        """Closes with 1008 unless the session is the tenant's and long-running; else runs the terminal."""
+        try:
+            LIMITS.check_rate(tenant_id)
+            rec = get_authorized_session(session_id, tenant_id)
+            require_persistent(rec, "The interactive terminal")
+        except (HTTPException, LimitExceeded):
+            await websocket.close(1008)
+            return
+        await open_terminal(websocket, rec, actor)
 
     def delete_snapshot(self, tenant_id: str, snapshot_id: str) -> dict:
         LIMITS.check_rate(tenant_id)

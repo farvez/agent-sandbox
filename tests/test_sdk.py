@@ -478,3 +478,22 @@ def test_snapshots_round_trip(api_url, monkeypatch, tmp_path):
         assert s2.files.read("copy/app/main.py") == "print(1)"
     s2.delete_snapshot(snap["id"])
     assert s2.list_snapshots() == []
+
+
+# ---------------------------------------------------------------- long-running sandboxes
+
+
+def test_persistent_and_expose(api_url, monkeypatch):
+    monkeypatch.setattr(server, "PREVIEW_DOMAIN", "preview.test")
+    with Sandbox(api_key=KEY, base_url=api_url, persistent=True) as sbx:
+        assert sbx.persistent and server.active_sessions[sbx.session_id].persistent
+        url = sbx.expose(8000)
+        token = server.active_sessions[sbx.session_id].workspace.preview_token
+        assert url == f"https://8000-{token}.preview.test"
+        sbx.unexpose(8000)
+        assert server.active_sessions[sbx.session_id].workspace.exposed_ports == []
+    with Sandbox(api_key=KEY, base_url=api_url) as regular:
+        assert regular.persistent is False
+        with pytest.raises(SandboxError) as e:
+            regular.expose(8000)
+        assert e.value.status == 409

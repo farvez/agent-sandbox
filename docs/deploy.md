@@ -110,6 +110,13 @@ scripts/deploy.sh --yes    # no question
 - **Runtime config:** settings added after launch (snapshots so far) live in the SSM parameter
   `/agent-sandbox/runtime-config` (JSON of `SANDBOX_*` variables), which the API reads at
   startup. Changing them is an in-place deploy; only boot-script changes replace the host.
+- **Long-running sessions and previews:** set `preview_domain` (e.g. a domain of its own,
+  `airlock-preview.example.com`) and add a wildcard DNS record `*.<preview_domain>` → the
+  Elastic IP. Caddy then gets a certificate per preview hostname on first use, only for names
+  the API confirms are open previews. Previews serve users' code, so keep them off a domain
+  whose reputation matters. `max_persistent_sessions` (8) caps long-running sessions on the host.
+- **Host firewall:** `airlock-hostguard` (a systemd unit) drops new connections from Docker
+  networks to the host itself, so sandboxes and egress proxies can't reach host services.
 - **Operator emails:** new invite requests are published to the alerts SNS topic, so they reach
   `alert_email` alongside alarms.
 - Keys are also stored in Terraform state; keep state private.

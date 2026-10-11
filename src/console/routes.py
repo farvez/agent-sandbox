@@ -15,7 +15,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Set
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from fastapi.templating import Jinja2Templates
@@ -30,6 +30,7 @@ from src.console.auth import (
     new_session,
     tenant_for_login,
 )
+_SESSION_BASE, _STATE_BASE = SESSION_COOKIE, STATE_COOKIE
 from src.console.terminal import HOME, MAX_COMMAND_CHARS, clean_cwd, split_cwd, wrap_command
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
@@ -40,17 +41,19 @@ def asset_version(directory: str = STATIC_DIR) -> str:
     """A short hash of the console's CSS and JS. Pages link `console.css?v=<hash>`, so every
     change gets a new URL and browsers never keep using a stale copy after a deploy."""
     digest = hashlib.sha256()
-    for name in sorted(os.listdir(directory)):
+    paths = sorted(os.path.relpath(os.path.join(root, name), directory).replace(os.sep, "/")
+                   for root, _, names in os.walk(directory) for name in names)
+    for name in paths:
         with open(os.path.join(directory, name), "rb") as f:
             digest.update(name.encode() + b"/" + f.read())
     return digest.hexdigest()[:12]
 
 
 ASSET_VERSION = asset_version()
-FLASH_COOKIE = "airlock_flash"
+FLASH_COOKIE = _FLASH_BASE = "airlock_flash"
 # A GitHub user who signed in without an invite: their verified identity, so they can
 # request one without a console session (and nobody can request in someone else's name).
-PENDING_COOKIE = "airlock_pending"
+PENDING_COOKIE = _PENDING_BASE = "airlock_pending"
 PENDING_TTL = 30 * 60
 NOTE_MAX, CONTACT_MAX = 500, 200
 GITHUB_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -64,6 +67,12 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
     "Cache-Control": "no-store",
+}
+# The interactive terminal (xterm.js) sets styles at runtime; scripts stay 'self'-only.
+TERMINAL_HEADERS = {
+    **SECURITY_HEADERS,
+    "Content-Security-Policy": SECURITY_HEADERS["Content-Security-Policy"].replace(
+        "style-src 'self';", "style-src 'self' 'unsafe-inline';"),
 }
 
 
@@ -113,6 +122,11 @@ def build_console_router(
     oauth = github or GitHubOAuth(config.github_client_id, config.github_client_secret,
                                   f"{config.base_url}/console/auth/callback")
     secure_cookies = config.base_url.startswith("https://")
+    # Over https every cookie is a __Host- cookie: Secure, path /, and impossible to set from a
+    # subdomain (preview sites live on subdomains and could otherwise plant cookies we'd read).
+    prefix = "__Host-" if secure_cookies else ""
+    SESSION_COOKIE, STATE_COOKIE = prefix + _SESSION_BASE, prefix + _STATE_BASE
+    FLASH_COOKIE, PENDING_COOKIE = prefix + _FLASH_BASE, prefix + _PENDING_BASE
 
     # ------------------------------------------------------------------ helpers
 
@@ -153,15 +167,15 @@ def build_console_router(
             "pending_requests": len(accounts().list_requests()) if admin else 0,
             "flash": flash, **context,
         }, status_code=status_code)
-        response.headers.update(SECURITY_HEADERS)
+        response.headers.update(TERMINAL_HEADERS if context.get("interactive") else SECURITY_HEADERS)
         if flash is not None:
-            response.delete_cookie(FLASH_COOKIE, path="/console")
+            response.delete_cookie(FLASH_COOKIE, path="/")
         return response
 
     def set_flash(response: Response, kind: str, text: str) -> Response:
         """A one-time notice shown on the next page (signed, so it can't be forged into the page)."""
         response.set_cookie(FLASH_COOKIE, signer.dumps({"kind": kind, "text": text[:600]}, 120), max_age=120,
-                            httponly=True, secure=secure_cookies, samesite="lax", path="/console")
+                            httponly=True, secure=secure_cookies, samesite="lax", path="/")
         return response
 
     def redirect(url: str) -> RedirectResponse:
@@ -221,7 +235,7 @@ def build_console_router(
         state = secrets.token_urlsafe(24)
         response = redirect(oauth.authorize_url(state))
         response.set_cookie(STATE_COOKIE, signer.dumps({"state": state}, STATE_TTL), max_age=STATE_TTL,
-                            httponly=True, secure=secure_cookies, samesite="lax", path="/console")
+                            httponly=True, secure=secure_cookies, samesite="lax", path="/")
         return response
 
     @router.get("/auth/callback", response_class=HTMLResponse)
@@ -239,8 +253,8 @@ def build_console_router(
         if accounts().is_blocked(login_lower) and login_lower not in config.admins:
             response = render(request, "message.html", 403, title="Access removed", session=None, is_admin=False,
                               pending_requests=0, message=f"@{gh['login']} no longer has access to this console.")
-            response.delete_cookie(STATE_COOKIE, path="/console")
-            response.delete_cookie(SESSION_COOKIE, path="/console")
+            response.delete_cookie(STATE_COOKIE, path="/")
+            response.delete_cookie(SESSION_COOKIE, path="/")
             return response
         allowed = (login_lower in config.admins or config.signup == "open"
                    or accounts().get_user(gh["id"]) is not None or accounts().is_invited(login_lower))
@@ -249,17 +263,17 @@ def build_console_router(
                        "avatar": gh["avatar_url"], "csrf": secrets.token_urlsafe(24)}
             response = invite_page(request, pending, 403)
             response.set_cookie(PENDING_COOKIE, signer.dumps(pending, PENDING_TTL), max_age=PENDING_TTL,
-                                httponly=True, secure=secure_cookies, samesite="lax", path="/console")
-            response.delete_cookie(STATE_COOKIE, path="/console")
-            response.delete_cookie(SESSION_COOKIE, path="/console")   # a different GitHub account signed in
+                                httponly=True, secure=secure_cookies, samesite="lax", path="/")
+            response.delete_cookie(STATE_COOKIE, path="/")
+            response.delete_cookie(SESSION_COOKIE, path="/")   # a different GitHub account signed in
             return response
         user = accounts().save_user(gh["id"], gh["login"], gh["name"], gh["avatar_url"], tenant_for_login(gh["login"]))
         accounts().delete_request(login_lower)   # they're in; nothing left to approve
         response = redirect("/console")
         response.set_cookie(SESSION_COOKIE, signer.dumps(new_session(user), SESSION_TTL), max_age=SESSION_TTL,
-                            httponly=True, secure=secure_cookies, samesite="lax", path="/console")
-        response.delete_cookie(STATE_COOKIE, path="/console")
-        response.delete_cookie(PENDING_COOKIE, path="/console")
+                            httponly=True, secure=secure_cookies, samesite="lax", path="/")
+        response.delete_cookie(STATE_COOKIE, path="/")
+        response.delete_cookie(PENDING_COOKIE, path="/")
         return response
 
     # ------------------------------------------------------------------ invite requests
@@ -310,7 +324,7 @@ def build_console_router(
     async def logout(request: Request, csrf: str = Form("")):
         require(request, csrf)
         response = redirect("/console")
-        response.delete_cookie(SESSION_COOKIE, path="/console")
+        response.delete_cookie(SESSION_COOKIE, path="/")
         return response
 
     # ------------------------------------------------------------------ API keys
@@ -556,7 +570,8 @@ def build_console_router(
                       egress=egress(tenant), limits=limits(tenant), ttl_minutes=sessions.ttl_seconds // 60, error=error,
                       github_enabled=gh_app() is not None, installations=installations,
                       snapshots_enabled=sessions.snapshots_enabled,
-                      snapshots=sessions.snapshots(tenant) if sessions.snapshots_enabled else [])
+                      snapshots=sessions.snapshots(tenant) if sessions.snapshots_enabled else [],
+                      previews_enabled=sessions.previews_enabled)
 
     @router.get("/workspaces", response_class=HTMLResponse)
     @guarded
@@ -567,11 +582,12 @@ def build_console_router(
     @router.post("/workspaces", response_class=HTMLResponse)
     @guarded
     async def create_workspace(request: Request, csrf: str = Form(""), internet: str = Form(""),
-                               repo: str = Form(""), ref: str = Form("")):
+                               repo: str = Form(""), ref: str = Form(""), persistent: str = Form("")):
         session = require(request, csrf)
         tenant = session["tid"]
         try:
-            created = await run_in_threadpool(sessions.create, tenant, egress(tenant) if internet else [])
+            created = await run_in_threadpool(sessions.create, tenant, egress(tenant) if internet else [],
+                                              bool(persistent))
         except Exception as e:
             status_code, message = failure(e)
             return workspaces_page(request, session, error=message, status_code=status_code)
@@ -598,7 +614,8 @@ def build_console_router(
                           message=f"{message}. Workspaces close after {sessions.ttl_seconds // 60} minutes without use.")
         return render(request, "workspace.html", workspace=workspace, home=HOME, start_cwd=clean_cwd(cwd),
                       ttl_minutes=sessions.ttl_seconds // 60, snapshots_enabled=sessions.snapshots_enabled,
-                      upload_max_mb=sessions.upload_max_bytes // 2**20)
+                      upload_max_mb=sessions.upload_max_bytes // 2**20,
+                      interactive=bool(workspace.get("persistent")), previews_enabled=sessions.previews_enabled)
 
     @router.post("/workspaces/{session_id}/delete")
     @guarded
@@ -721,13 +738,14 @@ def build_console_router(
 
     @router.post("/snapshots/{snapshot_id}/start", response_class=HTMLResponse)
     @guarded
-    async def start_from_snapshot(request: Request, snapshot_id: str, csrf: str = Form(""), internet: str = Form("")):
+    async def start_from_snapshot(request: Request, snapshot_id: str, csrf: str = Form(""), internet: str = Form(""),
+                                  persistent: str = Form("")):
         session = require(request, csrf)
         tenant = session["tid"]
         try:
             created = await run_in_threadpool(sessions.create_from_snapshot, tenant,
                                               egress(tenant) if internet else [], snapshot_id,
-                                              actor=f"console @{session['login']}")
+                                              actor=f"console @{session['login']}", persistent=bool(persistent))
         except Exception as e:
             status_code, message = failure(e)
             return workspaces_page(request, session, error=message, status_code=status_code)
@@ -743,6 +761,55 @@ def build_console_router(
         try:
             snap = await run_in_threadpool(sessions.delete_snapshot, session["tid"], snapshot_id)
             set_flash(response, "ok", f"Deleted snapshot “{snap['name']}”.")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
+
+    # ---------------------------------------------------------------- long-running workspaces
+
+    @router.websocket("/workspaces/{session_id}/terminal")
+    async def workspace_terminal(websocket: WebSocket, session_id: str, csrf: str = ""):
+        """The interactive terminal. Browsers send cookies on WebSockets but no custom headers, and
+        WebSockets aren't covered by CORS: so the Origin must be the console's own, and the page's
+        CSRF token must come along in the URL."""
+        session = signer.loads(websocket.cookies.get(SESSION_COOKIE))
+        if session is not None and accounts().get_user(session["gid"]) is None:
+            session = None                                    # the account was removed
+        origin = websocket.headers.get("origin", "")
+        if (session is None or origin != config.base_url
+                or not secrets.compare_digest(csrf.encode(), str(session.get("csrf", "")).encode())):
+            await websocket.close(1008)
+            return
+        await sessions.terminal(websocket, session["tid"], session_id, actor=f"console @{session['login']}")
+
+    @router.post("/workspaces/{session_id}/previews")
+    @guarded
+    async def workspace_expose(request: Request, session_id: str, csrf: str = Form(""), port: str = Form("")):
+        session = require(request, csrf)
+        response = redirect(f"/console/workspaces/{session_id}")
+        try:
+            number = int(port.strip())
+        except ValueError:
+            set_flash(response, "error", "Enter a port number, e.g. 3000.")
+            return response
+        try:
+            result = await run_in_threadpool(sessions.expose, session["tid"], session_id, number,
+                                             actor=f"console @{session['login']}")
+            set_flash(response, "ok", f"Port {number} is at {result['url']} (anyone with the link can open it "
+                                      "while this workspace is open).")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
+
+    @router.post("/workspaces/{session_id}/previews/{port}/close")
+    @guarded
+    async def workspace_unexpose(request: Request, session_id: str, port: int, csrf: str = Form("")):
+        session = require(request, csrf)
+        response = redirect(f"/console/workspaces/{session_id}")
+        try:
+            await run_in_threadpool(sessions.unexpose, session["tid"], session_id, port,
+                                    actor=f"console @{session['login']}")
+            set_flash(response, "ok", f"Closed the preview of port {port}.")
         except Exception as e:
             set_flash(response, "error", failure(e)[1])
         return response

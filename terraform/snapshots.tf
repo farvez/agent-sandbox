@@ -73,6 +73,8 @@ resource "aws_ssm_parameter" "runtime_config" {
     SANDBOX_SNAPSHOT_RETENTION_DAYS = tostring(var.snapshot_retention_days)
     SANDBOX_SNAPSHOT_LIMIT          = tostring(var.snapshot_limit)
     SANDBOX_SNAPSHOT_MAX_MB         = tostring(var.snapshot_max_mb)
+    SANDBOX_PREVIEW_DOMAIN          = var.preview_domain
+    SANDBOX_MAX_PERSISTENT_SESSIONS = tostring(var.max_persistent_sessions)
   })
 }
 
