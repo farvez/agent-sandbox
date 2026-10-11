@@ -118,6 +118,9 @@ def set_output(name: str, value: str) -> None:
 def main() -> int:
     from airlock_sandbox import Sandbox, SandboxError
 
+    # Status lines and the command's raw output share the job log: keep them in order.
+    sys.stdout.reconfigure(line_buffering=True)
+
     command = env("run")
     if not command:
         print("::error::Set the `run` input: the command to run in the sandbox.")
@@ -146,6 +149,7 @@ def main() -> int:
             out = sys.stdout.buffer
 
             def write(data: bytes) -> None:
+                sys.stdout.flush()
                 out.write(data)
                 out.flush()
 
