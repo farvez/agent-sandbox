@@ -1,0 +1,50 @@
+<section class="card concept">
+  <h2>1. From one tool to a toolbox</h2>
+  <p>Lesson 2 had one tool. A coding agent needs a few: <strong>read a file</strong>, <strong>write a file</strong>,
+    <strong>run the tests</strong>. You don't script the order; the model decides which tool to call next from what it
+    has seen so far. That's why the tool descriptions matter: they're how the model knows what each one is for.</p>
+<pre class="diagram">  run_tests  ──► "2 failures: median, variance"
+  read_file  ──► stats.py
+  write_file ──► stats.py  (fixed)
+  run_tests  ──► "OK"        ──► done: summarise the fix</pre>
+</section>
+
+<section class="card concept">
+  <h2>2. Tests are the goal</h2>
+  <p>"Fix the bugs" is vague; "make these tests pass" is checkable. The agent can verify its own work by running the
+    tests, and you can verify it the same way. Good agents work towards something they can check; that's also why the
+    prompt says to fix the code, not the tests.</p>
+</section>
+
+<section class="card concept">
+  <h2>3. Guardrails live in the tools</h2>
+  <p>The model chooses the arguments, so every tool treats them as untrusted input:</p>
+  <ul>
+    <li><strong>Paths stay inside <code>project/</code>.</strong> A request for <code>../../etc/passwd</code> is refused.
+      The sandbox already protects your machine; this protects the rest of the workspace (like the agent's own code).</li>
+    <li><strong>Output is capped</strong>, so a huge test log can't flood the conversation.</li>
+    <li><strong>Errors go back to the model</strong> as a <code>tool_result</code> with <code>is_error</code>, instead of
+      crashing the program. The model reads the error and tries something else.</li>
+  </ul>
+</section>
+
+<section class="card concept">
+  <h2>4. Several tool calls at once</h2>
+  <p>One reply can ask for more than one tool (read two files, say). Run them all and send <em>all</em> the results
+    back in a single message, each with its own <code>tool_use_id</code>.</p>
+</section>
+
+<section class="card" id="walkthrough">
+  <h2>Code walkthrough: <code>coder.py</code></h2>
+  <h3>The guard</h3>
+  <p>Resolve the path the model gave, then check it's still inside the project folder. <code>realpath</code> also
+    follows symbolic links, so a link pointing outside doesn't get through either.</p>
+<pre class="snippet">{{ lesson.snippet("coder.py", "def inside_project", "return full") }}</pre>
+  <h3>The tools</h3>
+  <p>Plain Python. <code>run_tests</code> runs the project's unit tests and returns the end of the report.</p>
+<pre class="snippet">{{ lesson.snippet("coder.py", "def run_tool", "raise ValueError(f\"unknown tool") }}</pre>
+  <h3>The loop, with error handling</h3>
+  <p>Same loop as lesson 2. The difference: when a tool fails, the error becomes the result, marked
+    <code>is_error</code>, so the model can recover.</p>
+<pre class="snippet">{{ lesson.snippet("coder.py", "results = []", "messages.append({\"role\": \"user\", \"content\": results})") }}</pre>
+</section>

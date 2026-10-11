@@ -73,7 +73,7 @@ Idle workspaces close after {{ ttl_minutes }} minutes and their files are wiped.
     <tbody>
     {% for w in workspaces %}
       <tr>
-        <td><a href="/console/workspaces/{{ w.session_id }}"><code>{{ w.session_id }}</code></a>{% if w.persistent %} <span class="pill ok">long-running</span>{% endif %}</td>
+        <td><a href="/console/workspaces/{{ w.session_id }}"><code>{{ w.session_id }}</code></a>{% if w.persistent %} <span class="pill ok">long-running</span>{% endif %}{% if w.lesson %} <span class="pill">lesson</span>{% endif %}</td>
         <td class="hide-sm">{% if w.egress %}<span class="pill ok">{{ w.egress | length }} host{{ 's' if w.egress | length != 1 }}</span>{% else %}<span class="pill">none</span>{% endif %}</td>
         <td class="hide-sm"><time data-ts="{{ w.created_at }}">{{ w.created_at | int }}</time></td>
         <td class="hide-sm"><time data-ts="{{ w.expires_at }}">{{ w.expires_at | int }}</time></td>

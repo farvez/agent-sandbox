@@ -217,8 +217,20 @@ form.inline-mini { display: inline; margin: 0; }
 .lesson-card { display: flex; flex-direction: column; gap: 8px; }
 .lesson-card h2 { margin: 0; }
 .lesson-card .button { align-self: flex-start; margin-top: auto; }
-.lesson-steps { padding-left: 1.3em; display: grid; gap: 14px; }
+.lesson-steps { padding-left: 1.3em; display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+.lesson-steps li { min-width: 0; }
 .lesson-steps p { margin: 0 0 6px; }
 details.lesson-panel { margin-top: 20px; padding: 12px 18px; }
 details.lesson-panel summary { cursor: pointer; font-weight: 600; }
 details.lesson-panel .lesson-steps { margin-top: 12px; }
+.lesson-toc { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 8px; font-size: .9rem; }
+.lesson-notes h3 { margin: 18px 0 6px; font-size: 1rem; }
+.lesson-notes .concept p { max-width: 72ch; }
+pre.diagram, pre.snippet { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+  overflow-x: auto; font: .82rem/1.5 var(--mono); white-space: pre; margin: 10px 0; }
+.file-tree { list-style: none; padding: 0; margin: 10px 0 14px; font-size: .92rem; }
+.file-tree li { padding: 3px 0; }
+.file-tree .depth-1 { padding-left: 1.5em; } .file-tree .depth-2 { padding-left: 3em; } .file-tree .depth-3 { padding-left: 4.5em; }
+details.file-code { margin-top: 8px; }
+details.file-code summary { cursor: pointer; }
+.lesson-panel .panel-links { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 0; }

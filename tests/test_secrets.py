@@ -81,3 +81,15 @@ def test_secrets_survive_a_restart(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "LIMITS", LimitTracker(load_tenant_limits('{"*": {"requests_per_minute": 1000}}')))
     assert server.restore_sessions() == 1
     assert server.active_sessions[sid].workspace.secrets == {"TOKEN": KEY}
+
+
+def test_lesson_link_is_kept_and_survives_a_restart(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "SESSION_STATE_PATH", str(tmp_path / "sessions.json"))
+    sid = create(client)
+    server.ConsoleSessions().set_lesson("acme", sid, "02-first-agent")
+    assert server.ConsoleSessions().get("acme", sid)["lesson"] == "02-first-agent"
+    server.persist_sessions()
+    server.active_sessions.clear()
+    monkeypatch.setattr(server, "LIMITS", LimitTracker(load_tenant_limits('{"*": {"requests_per_minute": 1000}}')))
+    server.restore_sessions()
+    assert server.active_sessions[sid].lesson == "02-first-agent"

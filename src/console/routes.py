@@ -619,7 +619,7 @@ def build_console_router(
                       upload_max_mb=sessions.upload_max_bytes // 2**20,
                       interactive=bool(workspace.get("persistent")), previews_enabled=sessions.previews_enabled,
                       secret_names=sessions.secrets(session["tid"], session_id),
-                      lesson=LESSONS_BY_SLUG.get(lesson))
+                      lesson=LESSONS_BY_SLUG.get(lesson or workspace.get("lesson") or ""))
 
     @router.post("/workspaces/{session_id}/delete")
     @guarded
@@ -702,7 +702,8 @@ def build_console_router(
         lesson = LESSONS_BY_SLUG.get(slug)
         if lesson is None:
             return render(request, "message.html", 404, title="Lesson not found", message="There's no such lesson.")
-        return render(request, "lesson.html", lesson=lesson, missing=lesson_access(session["tid"], lesson)[1])
+        return render(request, "lesson.html", lesson=lesson, number=LESSONS.index(lesson) + 1,
+                      missing=lesson_access(session["tid"], lesson)[1])
 
     @router.post("/learn/{slug}/start", response_class=HTMLResponse)
     @guarded
@@ -718,17 +719,18 @@ def build_console_router(
             created = await run_in_threadpool(sessions.create, tenant, granted, True)
         except Exception as e:
             status_code, message = failure(e)
-            return render(request, "lesson.html", status_code, lesson=lesson,
+            return render(request, "lesson.html", status_code, lesson=lesson, number=LESSONS.index(lesson) + 1,
                           missing=lesson_access(tenant, lesson)[1], error=message)
         sid = created["session_id"]
+        await run_in_threadpool(sessions.set_lesson, tenant, sid, slug)
         try:
             for path, data in lesson.files().items():
                 await run_in_threadpool(sessions.upload, tenant, sid, path, data, actor=actor)
         except Exception as e:
-            response = redirect(f"/console/workspaces/{sid}?lesson={slug}")
+            response = redirect(f"/console/workspaces/{sid}")
             set_flash(response, "error", f"The workspace started, but copying the lesson files failed: {failure(e)[1]}")
             return response
-        response = redirect(f"/console/workspaces/{sid}?lesson={slug}")
+        response = redirect(f"/console/workspaces/{sid}")
         set_flash(response, "ok", f"Lesson ready: {lesson.title}. Follow the steps above the terminal.")
         return response
 

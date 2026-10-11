@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% set active = 'workspaces' %}
+{% set active = 'learn' if lesson else 'workspaces' %}
 {% block title %}{{ workspace.session_id }} · Airlock console{% endblock %}
 {% block head %}
 {% if interactive %}
@@ -12,7 +12,7 @@
 {% block content %}
 <div class="heading-row">
   <div>
-    <p class="muted small"><a href="/console/workspaces">Workspaces</a> /</p>
+    <p class="muted small">{% if lesson %}<a href="/console/learn">Learn</a> / <a href="/console/learn/{{ lesson.slug }}">{{ lesson.title }}</a> /{% else %}<a href="/console/workspaces">Workspaces</a> /{% endif %}</p>
     <h1><code class="title-code">{{ workspace.session_id }}</code></h1>
     <p class="muted small">
       Internet: {% if workspace.egress %}{% for host in workspace.egress %}<code>{{ host }}</code>{{ ", " if not loop.last }}{% endfor %}{% else %}none{% endif %}
@@ -30,10 +30,24 @@
 <details class="card lesson-panel" open>
   <summary>Lesson: {{ lesson.title }}</summary>
   {% if lesson.secret and lesson.secret not in secret_names %}
-  <p class="muted small">First save your <code>{{ lesson.secret }}</code> under <strong>Secrets</strong> below.</p>
+  <p class="muted small">First save your <code>{{ lesson.secret }}</code> under <a href="#secrets"><strong>Secrets</strong></a> below.</p>
   {% endif %}
+  <p class="panel-links">
+    <a href="/console/learn/{{ lesson.slug }}#concepts" target="_blank" rel="noopener">Concepts and code walkthrough (new tab)</a>
+    <a href="/console/learn">All lessons</a>
+  </p>
+  <h3>Your files</h3>
+  <ul class="file-tree">
+    {% for name, note, depth in lesson.tree() %}
+    <li class="depth-{{ depth if depth < 4 else 3 }}"><code>{{ name }}</code>{% if note %} <span class="muted small">{{ note }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  <h3>Steps</h3>
   {% include "_lesson_steps.html" %}
-  <p class="muted small"><a href="/console/learn">All lessons</a></p>
+  {% if lesson.exercises %}
+  <h3>Try this next</h3>
+  <ol>{% for item in lesson.exercises %}<li>{{ item }}</li>{% endfor %}</ol>
+  {% endif %}
 </details>
 {% endif %}
 
@@ -64,7 +78,7 @@
   </form>
 </details>
 
-<details class="card secrets" {% if secret_names %}open{% endif %}>
+<details class="card secrets" id="secrets" {% if secret_names or (lesson and lesson.secret) %}open{% endif %}>
   <summary>Secrets{% if secret_names %} ({{ secret_names | length }}){% endif %}</summary>
   {% if secret_names %}
   <ul class="secrets-list">

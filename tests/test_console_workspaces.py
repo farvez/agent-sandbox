@@ -125,6 +125,9 @@ class FakeSessions:
 
     previews_enabled = True
 
+    def set_lesson(self, tenant, sid, slug):
+        self._owned(tenant, sid)["lesson"] = slug
+
     def secrets(self, tenant, sid):
         return sorted(self._owned(tenant, sid).setdefault("secret_values", {}))
 
@@ -535,15 +538,34 @@ def test_learn_pages_list_lessons_and_flag_missing_access(console):
 def test_start_lesson_copies_files_into_a_long_running_workspace(console):
     client, sessions, csrf = console
     res = client.post("/console/learn/03-coding-agent/start", data={"csrf": csrf})
-    assert res.status_code == 303 and "?lesson=03-coding-agent" in res.headers["location"]
-    sid = res.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    assert res.status_code == 303
+    sid = res.headers["location"].rsplit("/", 1)[-1]
     assert sessions.sessions[sid]["persistent"] is True
     assert sessions.sessions[sid]["egress"] == EGRESS            # only what the account may use
     uploaded = {c[2] for c in sessions.calls if c[0] == "upload" and c[1] == sid}
     assert {"coder.py", "project/stats.py", "project/test_stats.py"} <= uploaded
-    page = client.get(f"/console/workspaces/{sid}?lesson=03-coding-agent").text
+    page = client.get(f"/console/workspaces/{sid}").text            # the workspace remembers its lesson
     assert "Lesson: A coding agent that fixes failing tests" in page and "First save your" in page
+    assert "project/" in page and "Try this next" in page
+    # Saving the secret comes back to the same lesson workspace, with the panel still there.
+    res = client.post(f"/console/workspaces/{sid}/secrets", data={"csrf": csrf, "name": "ANTHROPIC_API_KEY", "value": "k"})
+    assert res.headers["location"] == f"/console/workspaces/{sid}"
+    page = client.get(res.headers["location"]).text
+    assert "Lesson: A coding agent" in page and "First save your" not in page
     assert client.post("/console/learn/03-coding-agent/start", data={"csrf": "forged"}).status_code in (303, 403)
+
+
+def test_lesson_pages_have_concepts_code_and_exercises(console):
+    from src.console.lessons import LESSONS
+
+    client, _, _ = console
+    for lesson in LESSONS:
+        page = html.unescape(client.get(f"/console/learn/{lesson.slug}").text)
+        assert page.count('class="card concept"') >= 3, lesson.slug       # concepts
+        assert 'id="walkthrough"' in page and 'class="snippet"' in page     # code walkthrough with real code
+        assert "Files in this lesson" in page and "Try this next" in page
+        main = lesson.file_notes[0][0]
+        assert lesson.text(main).splitlines()[0] in page                   # the full file is on the page
 
 
 def test_lesson_files_are_real():

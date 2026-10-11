@@ -2,11 +2,21 @@
 {% set active = 'learn' %}
 {% block title %}{{ lesson.title }} · Learn · Airlock console{% endblock %}
 {% block content %}
-<p class="muted small"><a href="/console/learn">Learn</a> /</p>
-<h1>{{ lesson.title }}</h1>
-<p>{{ lesson.summary }}</p>
-<p class="muted small">About {{ lesson.minutes }} minutes · internet:
-  {% for name in lesson.egress %}<code>{{ name }}</code>{{ ", " if not loop.last }}{% endfor %}</p>
+<p class="muted small"><a href="/console/learn">Learn</a> / Lesson {{ number }}</p>
+<div class="heading-row">
+  <div>
+    <h1>{{ lesson.title }}</h1>
+    <p>{{ lesson.summary }}</p>
+    <p class="muted small">About {{ lesson.minutes }} minutes · internet:
+      {% for name in lesson.egress %}<code>{{ name }}</code>{{ ", " if not loop.last }}{% endfor %}</p>
+  </div>
+  {% if not embedded %}
+  <form method="post" action="/console/learn/{{ lesson.slug }}/start">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <button class="button primary" type="submit" data-busy="Starting…">Start this lesson</button>
+  </form>
+  {% endif %}
+</div>
 
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 {% if missing %}
@@ -14,30 +24,61 @@
   internet access, which your account doesn't have yet, so the steps that call a model won't work. Ask the administrator to allow it.</p>
 {% endif %}
 
+<nav class="lesson-toc" aria-label="On this page">
+  <a href="#concepts">Concepts</a> <a href="#files">Files</a> <a href="#walkthrough">Code walkthrough</a>
+  <a href="#steps">Steps</a>{% if lesson.exercises %} <a href="#next">Try this next</a>{% endif %}
+</nav>
+
 {% if lesson.learn %}
 <section class="card">
   <h2>You'll learn</h2>
   <ul>{% for item in lesson.learn %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% if lesson.secret %}
+  <p class="muted small">You'll need an API key for <code>{{ lesson.secret }}</code> (from
+    <a href="https://platform.claude.com" rel="noopener noreferrer">platform.claude.com</a>). You'll save it as a workspace
+    secret: passed to your commands, never shown again, masked if printed, deleted with the workspace. Runs bill your own account.</p>
+  {% endif %}
 </section>
 {% endif %}
 
-{% if lesson.secret %}
-<section class="card">
-  <h2>Before you start</h2>
-  <p>You'll need an API key for <code>{{ lesson.secret }}</code> (from <a href="https://platform.claude.com" rel="noopener noreferrer">platform.claude.com</a>).
-    You save it as a workspace secret: it's passed to your commands as an environment variable, never shown again,
-    masked if printed, and deleted with the workspace. Runs bill your own account.</p>
-</section>
-{% endif %}
+<div id="concepts" class="lesson-notes">
+{% include "lessons/" ~ lesson.slug ~ ".html" %}
+</div>
 
-<section class="card">
+<section class="card" id="files">
+  <h2>Files in this lesson</h2>
+  <p class="muted small">Copied into <code>/workspace</code> when the lesson starts. Open them in the terminal with
+    <code>cat</code> (or <code>less</code>), and change them as you like.</p>
+  <ul class="file-tree">
+    {% for name, note, depth in lesson.tree() %}
+    <li class="depth-{{ depth if depth < 4 else 3 }}"><code>{{ name }}</code>{% if note %} <span class="muted small">{{ note }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% for path, note in lesson.file_notes if not path.endswith("/") %}
+  <details class="file-code" {% if loop.first %}open{% endif %}>
+    <summary><code>{{ path }}</code>: the whole file</summary>
+<pre class="snippet">{{ lesson.text(path) }}</pre>
+  </details>
+  {% endfor %}
+</section>
+
+<section class="card" id="steps">
   <h2>Steps</h2>
   {% include "_lesson_steps.html" %}
 </section>
 
+{% if lesson.exercises %}
+<section class="card" id="next">
+  <h2>Try this next</h2>
+  <ol>{% for item in lesson.exercises %}<li>{{ item }}</li>{% endfor %}</ol>
+</section>
+{% endif %}
+
+{% if not embedded %}
 <form method="post" action="/console/learn/{{ lesson.slug }}/start">
   <input type="hidden" name="csrf" value="{{ session.csrf }}">
   <button class="button primary" type="submit" data-busy="Starting…">Start this lesson</button>
   <span class="muted small">Opens a new long-running workspace with the lesson's files.</span>
 </form>
+{% endif %}
 {% endblock %}

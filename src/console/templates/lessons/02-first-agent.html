@@ -1,0 +1,59 @@
+<section class="card concept">
+  <h2>1. A model only writes text</h2>
+  <p>A language model takes text in and gives text out. It can't run code, read a file or check a fact by itself.
+    To let it <em>act</em>, you describe <strong>tools</strong> it may ask for: a name, what it does, and the
+    arguments it takes (as a JSON schema). The model never runs anything; it asks, and your program decides.</p>
+</section>
+
+<section class="card concept">
+  <h2>2. The agent loop</h2>
+  <p>An <strong>agent</strong> is a loop around the model:</p>
+<pre class="diagram">  you ── task ──► model
+                    │  stop_reason = "tool_use":  run_python(code="print(fib(30))")
+                    ▼
+            your program runs the code (in the sandbox) ── output "832040"
+                    │  sent back as a tool_result
+                    ▼
+                  model ── stop_reason = "end_turn":  "The 30th Fibonacci number is 832040."</pre>
+  <p>Each turn, the API response has a <code>stop_reason</code>. <code>"tool_use"</code> means "I want to call a tool:
+    run it and tell me the result". <code>"end_turn"</code> means "I'm done". Everything an AI coding assistant does
+    (edit files, run tests, search) is this loop with more tools.</p>
+</section>
+
+<section class="card concept">
+  <h2>3. The conversation is the memory</h2>
+  <p>The API doesn't remember anything between calls. Your program keeps a <code>messages</code> list and sends all of
+    it every time. After two turns it looks like this:</p>
+<pre class="diagram">  user:       "What is the 30th Fibonacci number?"
+  assistant:  [tool_use  id=tu_1  run_python(code=...)]
+  user:       [tool_result  tool_use_id=tu_1  "832040"]
+  assistant:  "The 30th Fibonacci number is 832040."</pre>
+  <p>The <code>tool_use_id</code> links each result to the request it answers.</p>
+</section>
+
+<section class="card concept">
+  <h2>4. Why the tool runs in a sandbox</h2>
+  <p>The code the model writes is <strong>untrusted</strong>: it can be wrong (an endless loop, deleting the wrong
+    folder) or, if the model was fed malicious text, hostile. Here it runs inside this workspace, with a 20-second
+    timeout and an internet allowlist, and your API key sits in a <strong>secret</strong> that's masked if anything
+    prints it. The worst it can do is break a disposable workspace.</p>
+</section>
+
+<section class="card" id="walkthrough">
+  <h2>Code walkthrough: <code>agent.py</code></h2>
+  <h3>The tool, described for the model</h3>
+  <p>The description is a prompt: it tells the model when and how to use the tool. The schema says what arguments it
+    takes.</p>
+<pre class="snippet">{{ lesson.snippet("agent.py", "TOOLS = [{", "}]") }}</pre>
+  <h3>The tool, implemented by you</h3>
+  <p>A real function: it runs the code in a separate Python process and returns what it printed. The timeout is a
+    guardrail: model-written code may never finish.</p>
+<pre class="snippet">{{ lesson.snippet("agent.py", "def run_python(code: str)", "return (done.stdout") }}</pre>
+  <h3>The loop</h3>
+  <p>Ask the model, keep its whole reply in the history, and stop unless it asked for a tool. The
+    <code>range(10)</code> is a budget: an agent must never be able to loop (and spend) forever.</p>
+<pre class="snippet">{{ lesson.snippet("agent.py", "for turn in range(10):", "print(next((b.text", after=1) }}</pre>
+  <p>Then run each requested tool and send every result back in <em>one</em> message, each tagged with the
+    <code>tool_use_id</code> it answers:</p>
+<pre class="snippet">{{ lesson.snippet("agent.py", "results = []", "messages.append({\"role\": \"user\", \"content\": results})") }}</pre>
+</section>

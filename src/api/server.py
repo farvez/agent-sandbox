@@ -270,6 +270,7 @@ class SessionRecord:
         # Fixed at creation: the workspace forgets its container once cleaned up, and the
         # long-running-session limit must still be released after that.
         self.persistent = bool(getattr(workspace, "persistent", False))
+        self.lesson: Optional[str] = None   # the console's Learn track: which lesson it was started for
         self.created_at = time.time()
         self.last_accessed_at = time.time()
 
@@ -287,6 +288,7 @@ class SessionRecord:
             "disk_quota_mb": self.workspace.quota_bytes // 2**20,
             "persistent": self.persistent,
             "previews": self.previews(),
+            "lesson": self.lesson,
         }
 
     def previews(self) -> List[dict]:
@@ -331,7 +333,7 @@ def persist_sessions() -> None:
     try:
         session_state.save(SESSION_STATE_PATH, [{
             **rec.workspace.state(), "session_egress": rec.egress,
-            "created_at": rec.created_at, "last_accessed_at": rec.last_accessed_at,
+            "created_at": rec.created_at, "last_accessed_at": rec.last_accessed_at, "lesson": rec.lesson,
         } for rec in records])
     except Exception:
         logger.exception("Saving the session registry failed")
@@ -353,6 +355,7 @@ def restore_sessions() -> int:
         rec = SessionRecord(saved["session_id"], workspace, saved["tenant_id"], egress=saved.get("session_egress"))
         rec.created_at = float(saved["created_at"])
         rec.last_accessed_at = float(saved["last_accessed_at"])
+        rec.lesson = saved.get("lesson")
         restored.append(rec)
     pool = get_pool()
     if pool is not None:
@@ -1322,6 +1325,10 @@ class ConsoleSessions:
             end_session(rec.session_id, tenant_id)
             raise
         return rec.summary()
+
+    def set_lesson(self, tenant_id: str, session_id: str, slug: str) -> None:
+        get_authorized_session(session_id, tenant_id).lesson = slug
+        persist_sessions()
 
     def secrets(self, tenant_id: str, session_id: str) -> List[str]:
         return sorted(get_authorized_session(session_id, tenant_id).workspace.secrets)
