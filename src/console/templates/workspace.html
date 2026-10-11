@@ -26,6 +26,17 @@
   </form>
 </div>
 
+{% if lesson %}
+<details class="card lesson-panel" open>
+  <summary>Lesson: {{ lesson.title }}</summary>
+  {% if lesson.secret and lesson.secret not in secret_names %}
+  <p class="muted small">First save your <code>{{ lesson.secret }}</code> under <strong>Secrets</strong> below.</p>
+  {% endif %}
+  {% include "_lesson_steps.html" %}
+  <p class="muted small"><a href="/console/learn">All lessons</a></p>
+</details>
+{% endif %}
+
 <details class="card import">
   <summary>Import a GitHub repository</summary>
   <form class="inline" id="import-form" autocomplete="off">
@@ -51,6 +62,31 @@
     <label class="check"><input type="checkbox" name="folder" value="1"> <span>folder as .tar.gz</span></label>
     <button class="button" type="submit">Download</button>
   </form>
+</details>
+
+<details class="card secrets" {% if secret_names %}open{% endif %}>
+  <summary>Secrets{% if secret_names %} ({{ secret_names | length }}){% endif %}</summary>
+  {% if secret_names %}
+  <ul class="secrets-list">
+    {% for name in secret_names %}
+    <li><code>${{ name }}</code>
+      <form class="inline-mini" method="post" action="/console/workspaces/{{ workspace.session_id }}/secrets/{{ name }}/delete">
+        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+        <button class="button" type="submit">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="inline" method="post" action="/console/workspaces/{{ workspace.session_id }}/secrets" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <input name="name" required maxlength="64" pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder="NAME, e.g. ANTHROPIC_API_KEY" spellcheck="false" autocapitalize="characters" aria-label="Secret name">
+    <input name="value" type="password" required maxlength="8192" placeholder="value" autocomplete="new-password" aria-label="Secret value">
+    <button class="button primary" type="submit">Save secret</button>
+  </form>
+  <p class="muted small">Environment variables for this workspace's commands, like an API key for a lesson. Never shown
+    again, masked if a command prints them, and deleted with the workspace. Code in the workspace can read them, so only
+    allow the internet hosts it needs.</p>
 </details>
 
 {% if snapshots_enabled %}
@@ -95,7 +131,9 @@
 {% endif %}
 
 <section class="xterm-wrap">
-  <div id="xterm" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" aria-label="Terminal"></div>
+  <div class="xterm-frame">
+    <div id="xterm" data-session="{{ workspace.session_id }}" data-csrf="{{ session.csrf }}" aria-label="Terminal"></div>
+  </div>
   <p class="muted small">A real shell in this workspace: background jobs keep running (<code>nohup cmd &gt; log 2&gt;&amp;1 &amp;</code>),
     and so does everything you start, until the workspace closes.</p>
 </section>

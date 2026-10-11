@@ -41,6 +41,9 @@ PRESETS: Dict[str, List[str]] = {
     "npm": ["registry.npmjs.org"],
     "github": ["github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com"],
     "huggingface": ["huggingface.co", "*.huggingface.co", "*.hf.co"],
+    # Model APIs, for code that calls an LLM with a key from the workspace's secrets.
+    "llm": ["api.anthropic.com", "api.openai.com", "api.groq.com", "generativelanguage.googleapis.com",
+            "openrouter.ai", "api.mistral.ai"],
 }
 
 

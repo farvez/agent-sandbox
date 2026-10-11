@@ -17,6 +17,7 @@
       <a href="/console/keys" {% if active == 'keys' %}aria-current="page"{% endif %}>API keys</a>
       {% if audit_enabled %}<a href="/console/activity" {% if active == 'activity' %}aria-current="page"{% endif %}>Activity</a>{% endif %}
       {% if workspaces_enabled %}<a href="/console/workspaces" {% if active == 'workspaces' %}aria-current="page"{% endif %}>Workspaces</a>{% endif %}
+      {% if workspaces_enabled %}<a href="/console/learn" {% if active == 'learn' %}aria-current="page"{% endif %}>Learn</a>{% endif %}
       {% if is_admin %}<a href="/console/admin" {% if active == 'admin' %}aria-current="page"{% endif %}>Admin{% if pending_requests %} <span class="badge" aria-label="{{ pending_requests }} invite requests waiting">{{ pending_requests }}</span>{% endif %}</a>{% endif %}
     </nav>
     <div class="me">

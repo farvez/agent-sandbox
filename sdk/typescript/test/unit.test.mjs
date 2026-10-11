@@ -256,3 +256,18 @@ test("persistent sandboxes and previews", async () => {
   assert.equal("persistent" in server.calls.at(-1).body, false);
   assert.equal(regular.persistent, false);
 });
+
+test("secrets: set at creation, add, list names, delete", async () => {
+  const names = new Set();
+  const server = fakeServer({
+    "POST /v1/sessions": ({ body }) => { Object.keys(body.secrets ?? {}).forEach((n) => names.add(n)); return [201, { session_id: "sbx_1", tenant_id: "acme", egress: [], disk_quota_mb: 512 }]; },
+    "PUT /v1/sessions/sbx_1/secrets": ({ body }) => { Object.keys(body.secrets).forEach((n) => names.add(n)); return { names: [...names].sort() }; },
+    "GET /v1/sessions/sbx_1/secrets": () => ({ names: [...names].sort() }),
+    "DELETE /v1/sessions/sbx_1/secrets/A_KEY": () => { names.delete("A_KEY"); return { names: [...names].sort() }; },
+  });
+  const sbx = await Sandbox.create(opts(server, { secrets: { A_KEY: "secret-value" } }));
+  assert.deepEqual(server.calls[0].body.secrets, { A_KEY: "secret-value" });
+  assert.deepEqual(await sbx.setSecrets({ B_KEY: "other" }), ["A_KEY", "B_KEY"]);
+  assert.deepEqual(await sbx.secretNames(), ["A_KEY", "B_KEY"]);
+  assert.deepEqual(await sbx.deleteSecret("A_KEY"), ["B_KEY"]);
+});

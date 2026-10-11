@@ -120,14 +120,15 @@ td.actions { display: flex; gap: 8px; justify-content: flex-end; align-items: ce
 .heading-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .heading-row p { margin-bottom: 2px; }
 .title-code { font-size: 1.3rem; background: none; padding: 0; }
-details.import, details.files, details.snapshot { margin-top: 20px; padding: 12px 18px; }
-details.import summary, details.files summary, details.snapshot summary { cursor: pointer; font-weight: 600; }
-details.import form.inline, details.files form.inline, details.snapshot form.inline { margin: 12px 0 6px; }
+details.import, details.files, details.snapshot, details.secrets { margin-top: 20px; padding: 12px 18px; }
+details.import summary, details.files summary, details.snapshot summary, details.secrets summary { cursor: pointer; font-weight: 600; }
+details.import form.inline, details.files form.inline, details.snapshot form.inline, details.secrets form.inline { margin: 12px 0 6px; }
 details.files form.inline .check { align-items: center; font-weight: 400; }
 details.files form.inline .check input { margin-top: 0; }
 input[type=file] { padding: 5px; }
 
-.terminal { margin-top: 20px; border-radius: 10px; overflow: hidden; border: 1px solid #22302b;
+/* section.terminal, not .terminal: xterm.js also puts class "terminal" on its own element. */
+section.terminal { margin-top: 20px; border-radius: 10px; overflow: hidden; border: 1px solid #22302b;
             background: #0d1311; color: #d7e2dd; --term-muted: #8a9a93; }
 .term-output { height: min(60vh, 520px); overflow-y: auto; padding: 14px 16px; font: .85rem/1.5 var(--mono); }
 .term-line { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -194,11 +195,30 @@ section.github .row form { margin: 0; }
 
 /* Long-running workspaces: the interactive terminal, previews, and the compact status log. */
 .xterm-wrap { margin-top: 20px; }
-#xterm { height: min(70vh, 560px); padding: 10px; border-radius: 10px; border: 1px solid #22302b; background: #0d1311; }
-.terminal.compact .term-output { max-height: 140px; min-height: 0; }
+/* The frame carries padding and border; xterm fills #xterm exactly (its fit addon measures it). */
+.xterm-frame { padding: 10px 6px 10px 12px; border-radius: 10px; border: 1px solid #22302b; background: #0d1311; }
+#xterm { height: min(70vh, 560px); overflow: hidden; }
+#xterm .xterm-viewport { background-color: #0d1311 !important; scrollbar-color: #33433d #0d1311; scrollbar-width: thin; }
+#xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+#xterm .xterm-viewport::-webkit-scrollbar-track { background: #0d1311; }
+#xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #33433d; border-radius: 4px; }
+section.terminal.compact .term-output { max-height: 140px; min-height: 0; }
 details.previews { margin-top: 20px; padding: 12px 18px; }
 details.previews summary { cursor: pointer; font-weight: 600; }
 details.previews form.inline { margin: 12px 0 6px; }
 .previews-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
 .previews-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
 form.inline-mini { display: inline; margin: 0; }
+.secrets-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.secrets-list li { display: flex; align-items: center; gap: 10px; }
+
+/* Learn track */
+.lessons { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 20px; }
+.lesson-card { display: flex; flex-direction: column; gap: 8px; }
+.lesson-card h2 { margin: 0; }
+.lesson-card .button { align-self: flex-start; margin-top: auto; }
+.lesson-steps { padding-left: 1.3em; display: grid; gap: 14px; }
+.lesson-steps p { margin: 0 0 6px; }
+details.lesson-panel { margin-top: 20px; padding: 12px 18px; }
+details.lesson-panel summary { cursor: pointer; font-weight: 600; }
+details.lesson-panel .lesson-steps { margin-top: 12px; }

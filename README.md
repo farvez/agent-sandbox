@@ -55,6 +55,10 @@ console.log((await sbx.run("cd itsdangerous && PYTHONPATH=src python -m pytest -
 claude mcp add --transport http --scope user airlock "https://airlock.complyoo.com/mcp?egress=pypi" --header "X-API-Key: <key>"
 ```
 
+**Learn** — hands-on lessons in the [console](https://airlock.complyoo.com/console/learn): build a
+tool-calling agent and a coding agent that fixes failing tests, each in its own sandbox, with your
+API key kept as a workspace secret.
+
 **Agent frameworks** — LangChain / LangGraph, the OpenAI Agents SDK and CrewAI:
 
 ```python
@@ -110,7 +114,6 @@ after 30 idle minutes and their workspace is wiped; snapshots keep a copy for la
 
 ## Roadmap
 
-- Learn track: workspace secrets, an LLM-access egress preset, hands-on lessons
 - Free-plan quotas from metering
 - Shared state and a session store for more than one API server; a Lambda MicroVM backend
   ([spike](docs/spikes/lambda-microvms.md))

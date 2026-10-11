@@ -2,6 +2,13 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.9.0 — 2026-10-12
+
+- Secrets: `Sandbox(secrets={...})`, `sbx.set_secrets({...})`, `sbx.delete_secret(name)` and
+  `sbx.secret_names()`: environment variables for every command, never returned by the server
+  and masked in output.
+- The `llm` egress preset (the major model APIs) is documented.
+
 ## 0.8.0 — 2026-10-11
 
 - Agent-framework tools: `airlock_sandbox.integrations.langchain`, `.openai_agents` and `.crewai`,

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import src.api.server as server
+from src.sandbox.workspace import SandboxedWorkspace
 from src.api.limits import LimitTracker, load_tenant_limits
 from src.sandbox.workspace_pool import WorkspaceCapacityError
 from tests.conftest import TENANT_KEYS, make_offline_workspace
@@ -49,7 +50,7 @@ class FakeSessionContainer:
     def ip_address(self):
         return self.ip
 
-    def open_pty(self, rows=24, cols=80):
+    def open_pty(self, rows=24, cols=80, env=None):
         self.pty = FakePty(rows, cols)
         return self.pty
 
@@ -75,6 +76,7 @@ class FakeWorkspace:
         self.session_container = FakeSessionContainer() if persistent else None
         self.preview_token = os.urandom(8).hex()
         self.exposed_ports = []
+        self.secrets = {}
 
     @property
     def persistent(self):
@@ -84,7 +86,7 @@ class FakeWorkspace:
         return {"session_id": self.session_id, "tenant_id": self.tenant_id, "workspace_dir": self.workspace_dir,
                 "quota_bytes": self.quota_bytes, "egress_rules": list(self.egress), "egress": None,
                 "persistent": self.persistent, "preview_token": self.preview_token,
-                "exposed_ports": list(self.exposed_ports)}
+                "exposed_ports": list(self.exposed_ports), "secrets": dict(self.secrets)}
 
     @classmethod
     def restore(cls, state):
@@ -97,6 +99,7 @@ class FakeWorkspace:
         ws.session_id, ws.tenant_id, ws.cleaned = state["session_id"], state["tenant_id"], False
         ws.session_container = FakeSessionContainer() if state.get("persistent") else None
         ws.preview_token, ws.exposed_ports = state.get("preview_token", "0" * 16), list(state.get("exposed_ports", []))
+        ws.secrets = dict(state.get("secrets", {}))
         return ws
 
     def write_file(self, path, content):
@@ -140,8 +143,11 @@ class FakeWorkspace:
 
     def execute(self, command, timeout_seconds=15):
         time.sleep(self.exec_delay)
-        return {"stdout": f"ran {command}\n", "stderr": "", "exit_code": 0,
-                "timed_out": False, "oom_killed": False, "warnings": []}
+        # Like a shell, expands $NAME from the secrets, then masks them as the real workspace does.
+        for name, value in self.secrets.items():
+            command = command.replace(f"${name}", value)
+        return SandboxedWorkspace.redact(self, {"stdout": f"ran {command}\n", "stderr": "", "exit_code": 0,
+                                                "timed_out": False, "oom_killed": False, "warnings": []})
 
     def egress_events(self, limit=200):
         return [{"decision": "allow", "host": "pypi.org"}] if self.egress else []

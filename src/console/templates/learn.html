@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% set active = 'learn' %}
+{% block title %}Learn · Airlock console{% endblock %}
+{% block content %}
+<h1>Learn</h1>
+<p class="muted">Hands-on lessons on building AI agents, each in its own sandbox. Starting one opens a long-running
+workspace with the lesson's files and just the internet access it needs; the steps appear above the terminal.
+Nothing you run can touch your own machine.</p>
+
+<div class="lessons">
+  {% for lesson in lessons %}
+  <article class="card lesson-card">
+    <p class="muted small">Lesson {{ loop.index }} · about {{ lesson.minutes }} minutes{% if lesson.secret %} · needs an Anthropic API key{% endif %}</p>
+    <h2><a href="/console/learn/{{ lesson.slug }}">{{ lesson.title }}</a></h2>
+    <p>{{ lesson.summary }}</p>
+    {% if missing[lesson.slug] %}
+    <p class="muted small">Needs {% for name in missing[lesson.slug] %}<code>{{ name }}</code>{{ ", " if not loop.last }}{% endfor %} internet access, which your account doesn't have yet.</p>
+    {% endif %}
+    <a class="button primary" href="/console/learn/{{ lesson.slug }}">Open lesson</a>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import uuid
@@ -193,6 +194,8 @@ class CreateSessionRequest(BaseModel):
     )
     snapshot_id: Optional[str] = Field(default=None, max_length=40,
                                        description="Start with this snapshot's files restored into /workspace")
+    secrets: Dict[str, str] = Field(default_factory=dict, description="Environment variables for every command, "
+                                    "e.g. an API key; never returned or logged (see /v1/sessions/{id}/secrets)")
     persistent: bool = Field(default=False, description="Keep one container running for the whole session: "
                              "background processes survive between commands, and the session gets an "
                              "interactive terminal and preview URLs")
@@ -206,6 +209,10 @@ class CreateSessionResponse(BaseModel):
     created_at: float
     status: str
     persistent: bool = False
+
+
+class SetSecretsRequest(BaseModel):
+    secrets: Dict[str, str] = Field(..., description='{"NAME": "value"}; added to (or replacing) the session\'s secrets')
 
 
 class ExposePortRequest(BaseModel):
@@ -637,6 +644,46 @@ def restore_snapshot(rec: SessionRecord, snapshot_id: str, path: str = ".", acto
     return {"restored": meta, "path": path or "."}
 
 
+SECRET_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
+RESERVED_SECRETS = {"PATH", "HOME", "PYTHONUSERBASE", "PYTHONPATH", "PYTHONHOME", "TERM", "SHELL", "USER",
+                    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "BASH_ENV", "ENV", "IFS"}
+MAX_SECRETS, MAX_SECRET_BYTES = 20, 8192
+
+
+def check_secrets(current: Dict[str, str], new: Dict[str, str]) -> None:
+    for name, value in new.items():
+        if not SECRET_NAME_RE.match(name):
+            raise HTTPException(status_code=422, detail=f"Secret names are UPPER_CASE letters, digits and _ "
+                                                        f"(max 64), like OPENAI_API_KEY; got {name[:70]!r}.")
+        if name in RESERVED_SECRETS or name.startswith(("AIRLOCK_", "PIP_", "LD_", "SANDBOX_")):
+            raise HTTPException(status_code=422, detail=f"{name} is used by the sandbox itself; pick another name.")
+        if not isinstance(value, str) or "\0" in value or len(value.encode()) > MAX_SECRET_BYTES:
+            raise HTTPException(status_code=422, detail=f"Secret {name}: values are text up to {MAX_SECRET_BYTES} bytes.")
+    if len({**current, **new}) > MAX_SECRETS:
+        raise HTTPException(status_code=422, detail=f"A session can have at most {MAX_SECRETS} secrets.")
+
+
+def set_secrets(rec: SessionRecord, secrets_in: Dict[str, str], actor: str = "api") -> List[str]:
+    """Adds or replaces secrets; returns every secret's name (never values)."""
+    current = rec.workspace.secrets
+    check_secrets(current, secrets_in)
+    current.update(secrets_in)
+    persist_sessions()
+    if secrets_in:
+        record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="secret",
+                     command="set secret " + ", ".join(sorted(secrets_in)), exit_code=0)
+    return sorted(current)
+
+
+def delete_secret(rec: SessionRecord, name: str, actor: str = "api") -> List[str]:
+    if rec.workspace.secrets.pop(name, None) is None:
+        raise HTTPException(status_code=404, detail=f"No secret named {name[:70]}.")
+    persist_sessions()
+    record_audit(rec.tenant_id, session_id=rec.session_id, actor=actor, kind="secret",
+                 command=f"delete secret {name}", exit_code=0)
+    return sorted(rec.workspace.secrets)
+
+
 def require_persistent(rec: SessionRecord, feature: str) -> None:
     if not rec.persistent:
         raise HTTPException(status_code=409, detail=f"{feature} needs a long-running session: "
@@ -722,12 +769,15 @@ def health_check():
 @app.post("/v1/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
 def create_session(request: CreateSessionRequest, tenant_id: str = Security(authorize),
                    header_key: Optional[str] = Security(api_key_header)):
+    check_secrets({}, request.secrets)
     if request.snapshot_id:
         try:
             require_snapshots().meta(tenant_id, request.snapshot_id)
         except SnapshotError as e:
             raise HTTPException(status_code=e.status, detail=str(e))
     rec = start_session(tenant_id, request.template, request.egress, persistent=request.persistent)
+    if request.secrets:
+        set_secrets(rec, request.secrets, actor=actor_for_key(header_key))
     if request.snapshot_id:
         try:
             restore_snapshot(rec, request.snapshot_id, actor=actor_for_key(header_key))
@@ -963,6 +1013,27 @@ def delete_snapshot(snapshot_id: str, tenant_id: str = Security(authorize)):
         raise HTTPException(status_code=e.status, detail=str(e))
 
 
+@app.put("/v1/sessions/{session_id}/secrets")
+def put_secrets(session_id: str, request: SetSecretsRequest, tenant_id: str = Security(authorize),
+                header_key: Optional[str] = Security(api_key_header)):
+    """Adds or replaces secrets: environment variables for every later command (and new terminals),
+    masked if a command prints them. Values are never returned."""
+    rec = get_authorized_session(session_id, tenant_id)
+    return {"session_id": session_id, "names": set_secrets(rec, request.secrets, actor=actor_for_key(header_key))}
+
+
+@app.get("/v1/sessions/{session_id}/secrets")
+def list_secrets(session_id: str, tenant_id: str = Security(authorize)):
+    return {"session_id": session_id, "names": sorted(get_authorized_session(session_id, tenant_id).workspace.secrets)}
+
+
+@app.delete("/v1/sessions/{session_id}/secrets/{name}")
+def remove_secret(session_id: str, name: str, tenant_id: str = Security(authorize),
+                  header_key: Optional[str] = Security(api_key_header)):
+    rec = get_authorized_session(session_id, tenant_id)
+    return {"session_id": session_id, "names": delete_secret(rec, name, actor=actor_for_key(header_key))}
+
+
 @app.post("/v1/sessions/{session_id}/previews")
 def expose(session_id: str, request: ExposePortRequest, tenant_id: str = Security(authorize),
            header_key: Optional[str] = Security(api_key_header)):
@@ -1000,7 +1071,7 @@ async def open_terminal(websocket: WebSocket, rec: SessionRecord, actor: str) ->
     rows = int(websocket.query_params.get("rows", 24) or 24)
     cols = int(websocket.query_params.get("cols", 80) or 80)
     try:
-        pty = await asyncio.to_thread(rec.workspace.session_container.open_pty, rows, cols)
+        pty = await asyncio.to_thread(rec.workspace.session_container.open_pty, rows, cols, rec.workspace.secrets)
     except Exception:
         logger.exception("Opening a terminal failed")
         await websocket.close(1011)
@@ -1251,6 +1322,17 @@ class ConsoleSessions:
             end_session(rec.session_id, tenant_id)
             raise
         return rec.summary()
+
+    def secrets(self, tenant_id: str, session_id: str) -> List[str]:
+        return sorted(get_authorized_session(session_id, tenant_id).workspace.secrets)
+
+    def set_secret(self, tenant_id: str, session_id: str, name: str, value: str, actor: str = "console") -> List[str]:
+        LIMITS.check_rate(tenant_id)
+        return set_secrets(get_authorized_session(session_id, tenant_id), {name: value}, actor=actor)
+
+    def delete_secret(self, tenant_id: str, session_id: str, name: str, actor: str = "console") -> List[str]:
+        LIMITS.check_rate(tenant_id)
+        return delete_secret(get_authorized_session(session_id, tenant_id), name, actor=actor)
 
     # Long-running sessions: previews and the interactive terminal.
     @property

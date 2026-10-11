@@ -330,11 +330,9 @@ resource "aws_instance" "sandbox_host" {
     api_key_param        = aws_ssm_parameter.api_keys.name
     domain_name          = var.domain_name
     session_ttl_secs     = var.session_ttl_seconds
-    egress_policy_json   = jsonencode(var.egress_policy)
     workspaces_disk_gb   = var.workspaces_disk_gb
     workspace_slots      = var.workspace_slots
     workspace_quota_mb   = var.workspace_quota_mb
-    tenant_limits_json   = jsonencode(var.tenant_limits)
     public_ip            = aws_eip.sandbox.public_ip
     admin_key_param      = aws_ssm_parameter.admin_key.name
     keys_table           = aws_dynamodb_table.api_keys.name

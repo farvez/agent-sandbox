@@ -5,7 +5,7 @@ import os
 import re
 import urllib.parse
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from airlock_sandbox._http import HTTPClient
 from airlock_sandbox.errors import CommandError, SandboxError
@@ -139,7 +139,7 @@ class Sandbox:
     Args:
         api_key: tenant API key.
         base_url: server URL, e.g. "https://sandbox.example.com".
-        egress: hosts or presets ("pypi", "npm", "github", "huggingface") this
+        egress: hosts or presets ("pypi", "npm", "github", "huggingface", "llm") this
             session may reach over HTTPS. Empty means no network at all.
         template: container image; must be on the server's allowlist.
         verify: True (default), False to accept a self-signed certificate, or a
@@ -151,6 +151,8 @@ class Sandbox:
         persistent: keep one container running for the whole session, so background
             processes (servers, workers) survive between commands and ports can be
             previewed with expose(). Tenants can run only a few at a time.
+        secrets: environment variables for every command, e.g. {"OPENAI_API_KEY": key}.
+            Never returned by the server, and masked if a command prints them.
     """
 
     def __init__(
@@ -165,6 +167,7 @@ class Sandbox:
         max_retries: int = 3,
         snapshot: Optional[str] = None,
         persistent: bool = False,
+        secrets: Optional[Dict[str, str]] = None,
     ):
         base_url = base_url or os.getenv("SANDBOX_API_URL")
         api_key = api_key or os.getenv("SANDBOX_API_KEY")
@@ -181,6 +184,7 @@ class Sandbox:
         self.requested_egress = list(egress or [])
         self.snapshot_id = snapshot
         self.persistent = persistent
+        self._initial_secrets = dict(secrets or {})
         self.files = Files(self)
         self.session_id: Optional[str] = None
         self.tenant_id: Optional[str] = None
@@ -209,6 +213,8 @@ class Sandbox:
             body["snapshot_id"] = self.snapshot_id
         if self.persistent:
             body["persistent"] = True
+        if self._initial_secrets:
+            body["secrets"] = self._initial_secrets
         data = self._http.request("POST", "/v1/sessions", body,
                                   timeout=max(self._http.timeout, 240) if self.snapshot_id else None)
         self.session_id = data["session_id"]
@@ -268,6 +274,17 @@ class Sandbox:
     def egress_log(self, limit: int = 200) -> List[dict]:
         """Every outbound connection this session attempted, allowed or denied."""
         return self._call("GET", f"/egress?limit={int(limit)}")["events"]
+
+    def set_secrets(self, secrets: Dict[str, str]) -> List[str]:
+        """Adds or replaces secrets (environment variables for every later command); returns all names."""
+        return self._call("PUT", "/secrets", {"secrets": dict(secrets)})["names"]
+
+    def delete_secret(self, name: str) -> List[str]:
+        return self._call("DELETE", f"/secrets/{urllib.parse.quote(name, safe='')}")["names"]
+
+    def secret_names(self) -> List[str]:
+        """Names of this session's secrets (values are never returned)."""
+        return self._call("GET", "/secrets")["names"]
 
     def expose(self, port: int) -> str:
         """Returns a public preview URL for a server listening on `port` (0.0.0.0) in this

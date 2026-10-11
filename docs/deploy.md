@@ -97,10 +97,12 @@ scripts/deploy.sh --yes    # no question
   ext4 filesystem of `workspaces_disk_gb` (default 15 GB) with project quotas, holding
   `workspace_slots` (default 100 = max concurrent sessions) directories of
   `workspace_quota_mb` (default 512 MB) each. Check usage with `sudo repquota -P /var/lib/agent-sandbox/workspaces`.
-- **Tenant limits:** `tenant_limits = { "*" = { max_sessions = 10 }, acme = { max_sessions = 50 } }`
-  (written to `/etc/agent-sandbox/tenant-limits.json`). Unset = built-in defaults.
-- **Egress:** `egress_policy` (default `{}`: no internet for anyone) is written to
-  `/etc/agent-sandbox/egress-policy.json`; logs are in `/var/lib/agent-sandbox/egress/`.
+- **Tenant limits:** `tenant_limits = { "*" = { max_sessions = 10, max_persistent_sessions = 2 }, acme = { max_sessions = 50 } }`.
+  Unset = built-in defaults.
+- **Egress:** `egress_policy` (default `{}`: no internet for anyone), e.g.
+  `{ "*" = ["pypi", "llm"] }` lets every tenant request PyPI and the model APIs. Logs are in
+  `/var/lib/agent-sandbox/egress/`. Policy and limits live in the runtime-config parameter, so
+  changing them is an in-place deploy.
   Docker's address pool is widened to `10.210.0.0/16` in /24s (256 concurrent egress sessions).
 - **Audit log:** a DynamoDB table (`agent-sandbox-audit`, deletion protection on, TTL after
   `audit_retention_days`, default 90) holds each tenant's command history.

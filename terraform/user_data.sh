@@ -148,18 +148,9 @@ for i in $(seq 1 "$WS_SLOTS"); do
 done
 install -d -o sandbox -g sandbox -m 0700 "$WS_ROOT.locks"
 
-# Per-tenant egress policy (Terraform var.egress_policy). Tenants not listed get no internet.
+# The egress policy and tenant limits come from the runtime-config SSM parameter (read by the
+# API at startup), so changing them is an in-place deploy rather than a new host.
 install -d -m 0755 /etc/agent-sandbox
-cat > /etc/agent-sandbox/egress-policy.json <<'POLICY'
-${egress_policy_json}
-POLICY
-chmod 0644 /etc/agent-sandbox/egress-policy.json
-
-# Per-tenant limits (Terraform var.tenant_limits): sessions, requests/minute, concurrent commands.
-cat > /etc/agent-sandbox/tenant-limits.json <<'LIMITS'
-${tenant_limits_json}
-LIMITS
-chmod 0644 /etc/agent-sandbox/tenant-limits.json
 
 # Launcher fetches the tenant keys from SSM on every start, so they never sit on
 # disk; rotating or adding keys only needs a parameter update plus a restart.
@@ -245,8 +236,6 @@ Environment=SANDBOX_REQUIRE_GVISOR=1
 Environment=SANDBOX_SESSION_TTL=$SESSION_TTL
 Environment=SANDBOX_WORKSPACE_POOL=$WS_ROOT
 Environment=SANDBOX_WORKSPACE_QUOTA_MB=$WS_QUOTA_MB
-Environment=SANDBOX_EGRESS_POLICY_FILE=/etc/agent-sandbox/egress-policy.json
-Environment=SANDBOX_TENANT_LIMITS_FILE=/etc/agent-sandbox/tenant-limits.json
 Environment=SANDBOX_KEYSTORE=dynamodb:$KEYS_TABLE
 Environment=SANDBOX_ACCOUNTS=dynamodb:$ACCOUNTS_TABLE
 Environment=SANDBOX_AUDIT=dynamodb:$AUDIT_TABLE

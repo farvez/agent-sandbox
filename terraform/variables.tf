@@ -40,7 +40,7 @@ variable "session_ttl_seconds" {
 }
 
 variable "egress_policy" {
-  description = "Hosts each tenant's sandboxes may reach over HTTPS via the egress gateway, e.g. { default = [\"pypi\"] }. Presets: pypi, npm, github, huggingface. Tenants not listed get no internet."
+  description = "Hosts each tenant's sandboxes may reach over HTTPS via the egress gateway, e.g. { default = [\"pypi\"] }. Presets: pypi, npm, github, huggingface, llm (the major model APIs). Tenants not listed get no internet."
   type        = map(list(string))
   default     = {}
 }

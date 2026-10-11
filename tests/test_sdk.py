@@ -497,3 +497,13 @@ def test_persistent_and_expose(api_url, monkeypatch):
         with pytest.raises(SandboxError) as e:
             regular.expose(8000)
         assert e.value.status == 409
+
+
+def test_secrets(api_url):
+    with Sandbox(api_key=KEY, base_url=api_url, secrets={"API_TOKEN": "tok-0123456789"}) as sbx:
+        assert sbx.secret_names() == ["API_TOKEN"]
+        assert server.active_sessions[sbx.session_id].workspace.secrets == {"API_TOKEN": "tok-0123456789"}
+        assert sbx.set_secrets({"OTHER": "value-123456"}) == ["API_TOKEN", "OTHER"]
+        assert sbx.delete_secret("API_TOKEN") == ["OTHER"]
+        with pytest.raises(ValidationError):
+            sbx.set_secrets({"PATH": "/x"})

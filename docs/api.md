@@ -8,7 +8,7 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | Method | Path | Body / query | Result |
 |--------|------|--------------|--------|
 | GET | `/healthz` | — | `{status, active_sessions}` |
-| POST | `/v1/sessions` | `{template?, metadata?, egress?, snapshot_id?, persistent?}` (a snapshot is restored into the new workspace; `persistent: true` = a [long-running session](#long-running-sessions)) | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
+| POST | `/v1/sessions` | `{template?, metadata?, egress?, snapshot_id?, persistent?, secrets?}` (a snapshot is restored into the new workspace; `persistent: true` = a [long-running session](#long-running-sessions)) | `201 {session_id, tenant_id, egress, disk_quota_mb, created_at, status}` · `400` template not allowed · `403` egress outside policy · `429` session limit · `503` no free workspace |
 | GET | `/v1/sessions` | — | `{tenant_id, sessions: [{session_id, egress, created_at, last_accessed_at, expires_at, disk_quota_mb}]}` — this tenant's open sessions |
 | POST | `/v1/sessions/{id}/write` | `{path, content}` | `{status, message}` · `403` on traversal · `413` over disk quota |
 | GET | `/v1/sessions/{id}/read` | `?path=` | `{path, content}` · `403` on traversal |
@@ -21,6 +21,9 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 | POST | `/v1/sessions/{id}/restore` | `{snapshot_id, path?}` | `{restored, path}` — unpacks a snapshot into `/workspace/<path>` · `404` unknown snapshot |
 | GET | `/v1/snapshots` | — | `{tenant_id, snapshots, limit, max_mb, retention_days}` — newest first |
 | DELETE | `/v1/snapshots/{snapshot_id}` | — | `{deleted}` · `404` |
+| PUT | `/v1/sessions/{id}/secrets` | `{secrets: {NAME: value}}` | `{session_id, names}` — adds or replaces [secrets](#secrets) · `422` bad or reserved name, value over 8 KB, more than 20 |
+| GET | `/v1/sessions/{id}/secrets` | — | `{session_id, names}` (never values) |
+| DELETE | `/v1/sessions/{id}/secrets/{name}` | — | `{session_id, names}` · `404` |
 | POST | `/v1/sessions/{id}/previews` | `{port}` (1024–65535) | `{port, url}` — a public preview URL for a server in a long-running session · `409` not long-running · `501` previews disabled |
 | DELETE | `/v1/sessions/{id}/previews/{port}` | — | `{port, status: "closed"}` |
 | WebSocket | `/v1/sessions/{id}/terminal` | `X-API-Key` header; `?rows=&cols=` | interactive bash on a PTY in a long-running session (see below) · closes `1008` for a bad key, another tenant's or a regular session |
@@ -38,6 +41,17 @@ when the tenant hits a limit (see [limits](#per-tenant-limits)). Most developers
 
 `exec` output is plain text with `[STDOUT]:`, `[STDERR]:`, `[WARNING]:` (OOM kill or over disk quota),
 `[TIMEOUT]:` and a final `[EXIT CODE]: n` line. Allowed templates: `sandbox-base:latest`, `python:3.11-slim`.
+
+## Secrets
+
+Environment variables a session's commands (and new terminals) get, such as an API key for code
+that calls a model. They're kept in the server's memory (and its private session-state file, so
+they survive an API restart) and deleted with the session; never returned by the API, never in
+the audit log (only names), and masked as `[secret NAME]` if a command prints one. Names are
+`UPPER_CASE` (max 64); names the sandbox itself uses (`PATH`, `HOME`, proxy settings, `PIP_*`,
+`LD_*`, `AIRLOCK_*`, ...) are refused. Code in the sandbox can read its secrets, so pair them with
+the narrowest egress, e.g. the `llm` preset (api.anthropic.com, api.openai.com, api.groq.com,
+generativelanguage.googleapis.com, openrouter.ai, api.mistral.ai).
 
 ## Long-running sessions
 

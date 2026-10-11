@@ -31,7 +31,9 @@ from src.console.auth import (
     tenant_for_login,
 )
 _SESSION_BASE, _STATE_BASE = SESSION_COOKIE, STATE_COOKIE
+from src.console.lessons import BY_SLUG as LESSONS_BY_SLUG, LESSONS
 from src.console.terminal import HOME, MAX_COMMAND_CHARS, clean_cwd, split_cwd, wrap_command
+from src.egress.proxy import expand_rules, rule_covered
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -224,7 +226,7 @@ def build_console_router(
 
     @router.get("/privacy", response_class=HTMLResponse)
     async def privacy(request: Request):
-        return render(request, "privacy.html", contact=config.contact, updated="11 October 2026")
+        return render(request, "privacy.html", contact=config.contact, updated="12 October 2026")
 
     @router.get("/terms", response_class=HTMLResponse)
     async def terms(request: Request):
@@ -604,7 +606,7 @@ def build_console_router(
 
     @router.get("/workspaces/{session_id}", response_class=HTMLResponse)
     @guarded
-    async def open_workspace(request: Request, session_id: str, cwd: str = HOME):
+    async def open_workspace(request: Request, session_id: str, cwd: str = HOME, lesson: str = ""):
         session = require(request)
         try:
             workspace = sessions.get(session["tid"], session_id)
@@ -615,7 +617,9 @@ def build_console_router(
         return render(request, "workspace.html", workspace=workspace, home=HOME, start_cwd=clean_cwd(cwd),
                       ttl_minutes=sessions.ttl_seconds // 60, snapshots_enabled=sessions.snapshots_enabled,
                       upload_max_mb=sessions.upload_max_bytes // 2**20,
-                      interactive=bool(workspace.get("persistent")), previews_enabled=sessions.previews_enabled)
+                      interactive=bool(workspace.get("persistent")), previews_enabled=sessions.previews_enabled,
+                      secret_names=sessions.secrets(session["tid"], session_id),
+                      lesson=LESSONS_BY_SLUG.get(lesson))
 
     @router.post("/workspaces/{session_id}/delete")
     @guarded
@@ -674,6 +678,59 @@ def build_console_router(
             status_code, message = failure(e)
             return json_response(status_code, {"error": message})
         return json_response(200, result)
+
+    # ---------------------------------------------------------------- Learn track
+
+    def lesson_access(tenant: str, lesson) -> tuple:
+        """(hosts the lesson's workspace gets, internet presets it needs that this account can't fully use)."""
+        allowed = egress(tenant)
+        granted = [h for h in expand_rules(list(lesson.egress)) if rule_covered(h, allowed)]
+        missing = [name for name in lesson.egress if not all(rule_covered(h, allowed) for h in expand_rules([name]))]
+        return granted, missing
+
+    @router.get("/learn", response_class=HTMLResponse)
+    @guarded
+    async def learn(request: Request):
+        session = require(request)
+        access = {l.slug: lesson_access(session["tid"], l)[1] for l in LESSONS}
+        return render(request, "learn.html", lessons=LESSONS, missing=access)
+
+    @router.get("/learn/{slug}", response_class=HTMLResponse)
+    @guarded
+    async def lesson_page(request: Request, slug: str):
+        session = require(request)
+        lesson = LESSONS_BY_SLUG.get(slug)
+        if lesson is None:
+            return render(request, "message.html", 404, title="Lesson not found", message="There's no such lesson.")
+        return render(request, "lesson.html", lesson=lesson, missing=lesson_access(session["tid"], lesson)[1])
+
+    @router.post("/learn/{slug}/start", response_class=HTMLResponse)
+    @guarded
+    async def start_lesson(request: Request, slug: str, csrf: str = Form("")):
+        session = require(request, csrf)
+        tenant = session["tid"]
+        lesson = LESSONS_BY_SLUG.get(slug)
+        if lesson is None:
+            return render(request, "message.html", 404, title="Lesson not found", message="There's no such lesson.")
+        granted, _ = lesson_access(tenant, lesson)
+        actor = f"console @{session['login']}"
+        try:
+            created = await run_in_threadpool(sessions.create, tenant, granted, True)
+        except Exception as e:
+            status_code, message = failure(e)
+            return render(request, "lesson.html", status_code, lesson=lesson,
+                          missing=lesson_access(tenant, lesson)[1], error=message)
+        sid = created["session_id"]
+        try:
+            for path, data in lesson.files().items():
+                await run_in_threadpool(sessions.upload, tenant, sid, path, data, actor=actor)
+        except Exception as e:
+            response = redirect(f"/console/workspaces/{sid}?lesson={slug}")
+            set_flash(response, "error", f"The workspace started, but copying the lesson files failed: {failure(e)[1]}")
+            return response
+        response = redirect(f"/console/workspaces/{sid}?lesson={slug}")
+        set_flash(response, "ok", f"Lesson ready: {lesson.title}. Follow the steps above the terminal.")
+        return response
 
     # ---------------------------------------------------------------- files and snapshots
 
@@ -781,6 +838,35 @@ def build_console_router(
             await websocket.close(1008)
             return
         await sessions.terminal(websocket, session["tid"], session_id, actor=f"console @{session['login']}")
+
+    @router.post("/workspaces/{session_id}/secrets")
+    @guarded
+    async def workspace_set_secret(request: Request, session_id: str, csrf: str = Form(""), name: str = Form(""),
+                                   value: str = Form("")):
+        session = require(request, csrf)
+        response = redirect(f"/console/workspaces/{session_id}")
+        name = name.strip().upper()
+        try:
+            await run_in_threadpool(sessions.set_secret, session["tid"], session_id, name, value,
+                                    actor=f"console @{session['login']}")
+            set_flash(response, "ok", f"Saved secret {name}. Commands see it as ${name}"
+                                      " (new terminals too); printed values are masked.")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
+
+    @router.post("/workspaces/{session_id}/secrets/{name}/delete")
+    @guarded
+    async def workspace_delete_secret(request: Request, session_id: str, name: str, csrf: str = Form("")):
+        session = require(request, csrf)
+        response = redirect(f"/console/workspaces/{session_id}")
+        try:
+            await run_in_threadpool(sessions.delete_secret, session["tid"], session_id, name,
+                                    actor=f"console @{session['login']}")
+            set_flash(response, "ok", f"Removed secret {name}.")
+        except Exception as e:
+            set_flash(response, "error", failure(e)[1])
+        return response
 
     @router.post("/workspaces/{session_id}/previews")
     @guarded

@@ -42,6 +42,10 @@
     <tr><td>Snapshots you save: a compressed copy of a workspace's files, its name and size</td>
         <td>So you can start a new workspace from it later</td>
         <td>Until you delete it, or 30 days after you saved it</td></tr>
+    <tr><td>Workspace secrets you save (for example an API key): kept in the server's memory and its private
+        session file, never shown again or logged (only their names are), masked in command output</td>
+        <td>To pass them to your workspace's commands</td>
+        <td>Until you remove them or the workspace closes</td></tr>
     <tr><td>Preview links you create: the port and a random link token, while the workspace is open.
         Requests to a preview go to your workspace; we don't store their content.</td>
         <td>To serve your preview</td>

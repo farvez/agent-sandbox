@@ -125,6 +125,22 @@ class FakeSessions:
 
     previews_enabled = True
 
+    def secrets(self, tenant, sid):
+        return sorted(self._owned(tenant, sid).setdefault("secret_values", {}))
+
+    def set_secret(self, tenant, sid, name, value, actor=None):
+        rec = self._owned(tenant, sid)
+        if not name.isidentifier() or name in ("PATH",):
+            raise HTTPException(422, f"{name} is used by the sandbox itself; pick another name.")
+        rec.setdefault("secret_values", {})[name] = value
+        return sorted(rec["secret_values"])
+
+    def delete_secret(self, tenant, sid, name, actor=None):
+        rec = self._owned(tenant, sid)
+        if rec.setdefault("secret_values", {}).pop(name, None) is None:
+            raise HTTPException(404, f"No secret named {name}.")
+        return sorted(rec["secret_values"])
+
     def expose(self, tenant, sid, port, actor=None):
         rec = self._owned(tenant, sid)
         if not rec["persistent"]:
@@ -483,3 +499,59 @@ def test_previews_expose_and_close(console):
     regular, _ = start(client, csrf)
     res = client.post(f"/console/workspaces/{regular}/previews", data={"csrf": csrf, "port": "8000"})
     assert res.status_code == 303      # flashed error: needs a long-running session
+
+
+def test_secrets_panel(console):
+    client, sessions, csrf = console
+    sid, _ = start(client, csrf)
+    res = client.post(f"/console/workspaces/{sid}/secrets", data={"csrf": csrf, "name": "openai_api_key", "value": "sk-hidden-123"})
+    assert res.status_code == 303
+    page = client.get(f"/console/workspaces/{sid}").text
+    assert "$OPENAI_API_KEY" in page and "sk-hidden-123" not in page        # upper-cased; value never shown
+    assert sessions.sessions[sid]["secret_values"] == {"OPENAI_API_KEY": "sk-hidden-123"}
+    client.post(f"/console/workspaces/{sid}/secrets", data={"csrf": csrf, "name": "PATH", "value": "x"})
+    assert "used by the sandbox itself" in html.unescape(client.get(f"/console/workspaces/{sid}").text)
+    client.post(f"/console/workspaces/{sid}/secrets/OPENAI_API_KEY/delete", data={"csrf": csrf})
+    assert sessions.sessions[sid]["secret_values"] == {}
+    assert client.post(f"/console/workspaces/{sid}/secrets", data={"csrf": "forged", "name": "A", "value": "b"}).status_code in (303, 403)
+    assert sessions.sessions[sid]["secret_values"] == {}
+
+
+
+# ---------------------------------------------------------------- Learn track
+
+
+def test_learn_pages_list_lessons_and_flag_missing_access(console):
+    client, _, _ = console
+    page = client.get("/console/learn")
+    assert page.status_code == 200 and 'href="/console/learn"' in page.text
+    assert "What a sandbox is" in page.text and "Your first tool-calling agent" in page.text
+    assert "Needs <code>llm</code> internet access" in page.text   # the test account only has PyPI
+    lesson = client.get("/console/learn/02-first-agent").text
+    assert "ANTHROPIC_API_KEY" in lesson and "python agent.py" in html.unescape(lesson)
+    assert client.get("/console/learn/nope").status_code == 404
+
+
+def test_start_lesson_copies_files_into_a_long_running_workspace(console):
+    client, sessions, csrf = console
+    res = client.post("/console/learn/03-coding-agent/start", data={"csrf": csrf})
+    assert res.status_code == 303 and "?lesson=03-coding-agent" in res.headers["location"]
+    sid = res.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    assert sessions.sessions[sid]["persistent"] is True
+    assert sessions.sessions[sid]["egress"] == EGRESS            # only what the account may use
+    uploaded = {c[2] for c in sessions.calls if c[0] == "upload" and c[1] == sid}
+    assert {"coder.py", "project/stats.py", "project/test_stats.py"} <= uploaded
+    page = client.get(f"/console/workspaces/{sid}?lesson=03-coding-agent").text
+    assert "Lesson: A coding agent that fixes failing tests" in page and "First save your" in page
+    assert client.post("/console/learn/03-coding-agent/start", data={"csrf": "forged"}).status_code in (303, 403)
+
+
+def test_lesson_files_are_real():
+    from src.console.lessons import LESSONS
+
+    for lesson in LESSONS:
+        files = lesson.files()
+        assert files and not any("__pycache__" in path for path in files)
+        for path, data in files.items():
+            if path.endswith(".py"):
+                compile(data, path, "exec")                       # every lesson script is valid Python

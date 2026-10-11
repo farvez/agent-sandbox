@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set active = 'learn' %}
+{% block title %}{{ lesson.title }} · Learn · Airlock console{% endblock %}
+{% block content %}
+<p class="muted small"><a href="/console/learn">Learn</a> /</p>
+<h1>{{ lesson.title }}</h1>
+<p>{{ lesson.summary }}</p>
+<p class="muted small">About {{ lesson.minutes }} minutes · internet:
+  {% for name in lesson.egress %}<code>{{ name }}</code>{{ ", " if not loop.last }}{% endfor %}</p>
+
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if missing %}
+<p class="error" role="note">This lesson needs {% for name in missing %}<code>{{ name }}</code>{{ ", " if not loop.last }}{% endfor %}
+  internet access, which your account doesn't have yet, so the steps that call a model won't work. Ask the administrator to allow it.</p>
+{% endif %}
+
+{% if lesson.learn %}
+<section class="card">
+  <h2>You'll learn</h2>
+  <ul>{% for item in lesson.learn %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if lesson.secret %}
+<section class="card">
+  <h2>Before you start</h2>
+  <p>You'll need an API key for <code>{{ lesson.secret }}</code> (from <a href="https://platform.claude.com" rel="noopener noreferrer">platform.claude.com</a>).
+    You save it as a workspace secret: it's passed to your commands as an environment variable, never shown again,
+    masked if printed, and deleted with the workspace. Runs bill your own account.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Steps</h2>
+  {% include "_lesson_steps.html" %}
+</section>
+
+<form method="post" action="/console/learn/{{ lesson.slug }}/start">
+  <input type="hidden" name="csrf" value="{{ session.csrf }}">
+  <button class="button primary" type="submit" data-busy="Starting…">Start this lesson</button>
+  <span class="muted small">Opens a new long-running workspace with the lesson's files.</span>
+</form>
+{% endblock %}

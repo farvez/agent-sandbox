@@ -74,6 +74,9 @@ class SandboxedWorkspace:
         self.session_container: Optional[SessionContainer] = None
         self.preview_token = preview_token()
         self.exposed_ports: List[int] = []
+        # Secrets: environment variables for every command (and terminal), never in the image,
+        # the container's start-up config or any log; see set_secrets().
+        self.secrets: Dict[str, str] = {}
         try:
             if self.egress_rules:
                 self._connect_egress(gateway)
@@ -81,7 +84,7 @@ class SandboxedWorkspace:
                 self.session_container = SessionContainer.start(
                     self.client, self.session_id, image=self.base_image, workspace_dir=self.workspace_dir,
                     user=self.container_user, runtime="runsc" if self.has_gvisor else None,
-                    environment=self._environment(), network_name=self.egress_network,
+                    environment=self._environment(include_secrets=False), network_name=self.egress_network,
                 )
         except Exception:
             self.cleanup()
@@ -106,6 +109,7 @@ class SandboxedWorkspace:
             },
             "session_container": self.session_container.state() if self.session_container else None,
             "preview_token": self.preview_token, "exposed_ports": list(self.exposed_ports),
+            "secrets": dict(self.secrets),
         }
 
     @classmethod
@@ -139,6 +143,7 @@ class SandboxedWorkspace:
                                                               box["network_name"], bool(box["owns_network"]))
         ws.preview_token = state.get("preview_token") or preview_token()
         ws.exposed_ports = [int(p) for p in state.get("exposed_ports") or []]
+        ws.secrets = dict(state.get("secrets") or {})
         return ws
 
     def _connect_egress(self, gateway: Optional[EgressGateway]) -> None:
@@ -275,8 +280,9 @@ class SandboxedWorkspace:
         finally:
             files.remove_quietly(path)
 
-    def _environment(self) -> Dict[str, str]:
-        environment: Dict[str, str] = dict(BASE_ENV)
+    def _environment(self, include_secrets: bool = True) -> Dict[str, str]:
+        environment: Dict[str, str] = dict(getattr(self, "secrets", {}) if include_secrets else {})
+        environment.update(BASE_ENV)          # secrets never override the sandbox's own settings
         if self.proxy_url:
             # Upper- and lower-case: different tools read different spellings.
             for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -284,6 +290,14 @@ class SandboxedWorkspace:
             # Previews: the host reaches the session's own servers directly, never via the proxy.
             environment["NO_PROXY"] = environment["no_proxy"] = "localhost,127.0.0.1"
         return environment
+
+    def redact(self, result: dict) -> dict:
+        """Masks secret values in a command's output (a printed key shouldn't reach logs or an LLM)."""
+        for name, value in getattr(self, "secrets", {}).items():
+            if len(value) >= 6:
+                for key in ("stdout", "stderr"):
+                    result[key] = result[key].replace(value, f"[secret {name}]")
+        return result
 
     def run_command(self, command: str, timeout_seconds: int = 15) -> str:
         """Executes a command and returns the result as text (the agent tools' format)."""
@@ -295,7 +309,7 @@ class SandboxedWorkspace:
         Returns {stdout, stderr, exit_code, timed_out, oom_killed, warnings}.
         """
         if self.session_container is not None:
-            result = self.session_container.execute(command, timeout_seconds)
+            result = self.redact(self.session_container.execute(command, timeout_seconds, env=self.secrets))
             used = self.disk_usage_bytes()
             if used > self.quota_bytes:
                 result["warnings"].append(
@@ -376,10 +390,10 @@ class SandboxedWorkspace:
                     f"Workspace uses {used / 2**20:.1f} MB, over its "
                     f"{self.quota_bytes / 2**20:.0f} MB disk quota. Delete files before writing more."
                 )
-            return {
+            return self.redact({
                 "stdout": stdout, "stderr": stderr, "exit_code": exit_code,
                 "timed_out": False, "oom_killed": oom_killed, "warnings": warnings,
-            }
+            })
 
         finally:
             if container:

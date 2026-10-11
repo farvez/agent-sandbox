@@ -117,12 +117,13 @@ class SessionContainer:
 
     # ------------------------------------------------------------------ commands
 
-    def execute(self, command: str, timeout_seconds: int) -> dict:
-        """Runs one command; returns {stdout, stderr, exit_code, timed_out, oom_killed, warnings}."""
+    def execute(self, command: str, timeout_seconds: int, env: Optional[Dict[str, str]] = None) -> dict:
+        """Runs one command; returns {stdout, stderr, exit_code, timed_out, oom_killed, warnings}.
+        `env` (the session's secrets) is added to this command's environment only."""
         api = self.client.api
         exec_id = api.exec_create(
             self.container.id, ["/bin/bash", "-c", WRAPPER], user=self.user, workdir="/workspace",
-            environment={"AIRLOCK_CMD": command, "AIRLOCK_TIMEOUT": str(int(timeout_seconds))},
+            environment={**(env or {}), "AIRLOCK_CMD": command, "AIRLOCK_TIMEOUT": str(int(timeout_seconds))},
         )["Id"]
         result: dict = {}
 
@@ -159,11 +160,11 @@ class SessionContainer:
 
     # ------------------------------------------------------------------ interactive terminal
 
-    def open_pty(self, rows: int = 24, cols: int = 80) -> "Pty":
+    def open_pty(self, rows: int = 24, cols: int = 80, env: Optional[Dict[str, str]] = None) -> "Pty":
         api = self.client.api
         exec_id = api.exec_create(
             self.container.id, ["/bin/bash", "-l"], user=self.user, workdir="/workspace",
-            tty=True, stdin=True, environment={"TERM": "xterm-256color"},
+            tty=True, stdin=True, environment={**(env or {}), "TERM": "xterm-256color"},
         )["Id"]
         sock = api.exec_start(exec_id, tty=True, socket=True)
         pty = Pty(api, exec_id, sock)

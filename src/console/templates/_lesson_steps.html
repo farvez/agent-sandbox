@@ -1,0 +1,11 @@
+<ol class="lesson-steps">
+  {% for step in lesson.steps %}
+  <li>
+    <p>{{ step.text }}</p>
+    {% if step.command %}
+    <div class="code"><button class="copy" type="button" data-copy="step-{{ loop.index }}">Copy</button>
+<pre id="step-{{ loop.index }}">{{ step.command }}</pre></div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ol>

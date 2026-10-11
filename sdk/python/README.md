@@ -72,6 +72,19 @@ with Sandbox(snapshot=snap["id"]) as sbx:      # starts with the snapshot's file
 `sbx.restore(id, path=".")` unpacks a snapshot into a running sandbox; `sbx.list_snapshots()` and
 `sbx.delete_snapshot(id)` manage them. Snapshots include installed packages under `/workspace/.local`.
 
+## Secrets
+
+```python
+with Sandbox(egress=["pypi", "llm"], secrets={"ANTHROPIC_API_KEY": key}) as sbx:
+    sbx.run("pip install anthropic", timeout=60).check()
+    sbx.run("python my_agent.py", timeout=60)       # sees $ANTHROPIC_API_KEY
+```
+
+Secrets are environment variables for every command. The server never returns them (only
+`sbx.secret_names()`), masks them as `[secret NAME]` if a command prints one, and deletes them
+with the session. Code in the sandbox can read them, so allow only the hosts it needs: the `llm`
+preset covers the major model APIs.
+
 ## Agent frameworks
 
 Ready-made tools (`write_file`, `read_file`, `run_command`) for the popular frameworks. Install the
@@ -133,7 +146,7 @@ Sandboxes have no network by default. Ask for specific hosts — they must be al
 your tenant's policy on the server:
 
 ```python
-with Sandbox(egress=["pypi"]) as sbx:              # presets: pypi, npm, github, huggingface
+with Sandbox(egress=["pypi"]) as sbx:              # presets: pypi, npm, github, huggingface, llm
     sbx.run("pip install requests", timeout=60).check()
     for event in sbx.egress_log():
         print(event["decision"], event["host"], event.get("reason", ""))

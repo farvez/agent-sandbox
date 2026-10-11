@@ -30,6 +30,8 @@ export interface SandboxOptions {
    * survive between commands, and ports can be previewed with expose().
    */
   persistent?: boolean;
+  /** Environment variables for every command, e.g. { OPENAI_API_KEY: key }. Never returned; masked in output. */
+  secrets?: Record<string, string>;
 }
 
 export interface RunOptions {
@@ -160,6 +162,7 @@ export class Sandbox {
   diskQuotaMb?: number;
   readonly snapshotId?: string;
   persistent: boolean;
+  private readonly initialSecrets: Record<string, string>;
   private readonly http: HttpClient;
 
   constructor(options: SandboxOptions = {}) {
@@ -177,6 +180,7 @@ export class Sandbox {
     this.requestedEgress = [...(options.egress ?? [])];
     this.snapshotId = options.snapshot;
     this.persistent = Boolean(options.persistent);
+    this.initialSecrets = { ...(options.secrets ?? {}) };
   }
 
   /** Creates and starts a sandbox. Remember to close() it, or use `await using`. */
@@ -202,6 +206,7 @@ export class Sandbox {
     const body: Record<string, unknown> = { template: this.template, egress: this.requestedEgress };
     if (this.snapshotId) body.snapshot_id = this.snapshotId;
     if (this.persistent) body.persistent = true;
+    if (Object.keys(this.initialSecrets).length) body.secrets = this.initialSecrets;
     const data = await this.http.request("POST", "/v1/sessions", body,
       this.snapshotId ? { timeoutMs: this.longTimeoutMs(240_000) } : {});
     this.sessionId = data.session_id;
@@ -246,6 +251,22 @@ export class Sandbox {
   /** Every outbound connection this session attempted, allowed or denied. */
   async egressLog(limit = 200): Promise<Record<string, unknown>[]> {
     return (await this.call<{ events: Record<string, unknown>[] }>("GET", `/egress?limit=${Math.trunc(limit)}`)).events;
+  }
+
+  // ------------------------------------------------------------------ secrets
+
+  /** Adds or replaces secrets (environment variables for every later command); returns all names. */
+  async setSecrets(secrets: Record<string, string>): Promise<string[]> {
+    return (await this.call<{ names: string[] }>("PUT", "/secrets", { secrets })).names;
+  }
+
+  async deleteSecret(name: string): Promise<string[]> {
+    return (await this.call<{ names: string[] }>("DELETE", `/secrets/${encodeURIComponent(name)}`)).names;
+  }
+
+  /** Names of this session's secrets (values are never returned). */
+  async secretNames(): Promise<string[]> {
+    return (await this.call<{ names: string[] }>("GET", "/secrets")).names;
   }
 
   // ------------------------------------------------------------------ previews (long-running sandboxes)

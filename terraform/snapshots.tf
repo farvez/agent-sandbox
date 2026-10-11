@@ -75,6 +75,9 @@ resource "aws_ssm_parameter" "runtime_config" {
     SANDBOX_SNAPSHOT_MAX_MB         = tostring(var.snapshot_max_mb)
     SANDBOX_PREVIEW_DOMAIN          = var.preview_domain
     SANDBOX_MAX_PERSISTENT_SESSIONS = tostring(var.max_persistent_sessions)
+    # Who may reach which hosts, and per-tenant limits: changing these restarts the API only.
+    SANDBOX_EGRESS_POLICY = jsonencode(var.egress_policy)
+    SANDBOX_TENANT_LIMITS = jsonencode(var.tenant_limits)
   })
 }
 

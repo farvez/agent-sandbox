@@ -387,3 +387,24 @@ def test_persistent_survives_restore():
         assert again.persistent and again.execute("cat note.txt")["stdout"] == "kept\n"
     finally:
         ws.cleanup()
+
+
+# ---------------------------------------------------------------- secrets
+
+
+def test_secrets_reach_commands_masked_and_removable(workspace):
+    workspace.secrets["DEMO_TOKEN"] = "tok-0123456789"
+    r = workspace.execute("echo len=${#DEMO_TOKEN}; echo $DEMO_TOKEN")
+    assert r["stdout"] == "len=14\n[secret DEMO_TOKEN]\n"
+    del workspace.secrets["DEMO_TOKEN"]
+    assert workspace.execute("echo [${DEMO_TOKEN:-unset}]")["stdout"] == "[unset]\n"
+
+
+def test_secrets_in_persistent_sessions_are_per_command(persistent):
+    persistent.secrets["DEMO_TOKEN"] = "tok-0123456789"
+    assert persistent.execute("echo ${#DEMO_TOKEN}")["stdout"] == "14\n"
+    # Not part of the container's own environment: removing it takes effect for the next command.
+    del persistent.secrets["DEMO_TOKEN"]
+    assert persistent.execute("echo [${DEMO_TOKEN:-unset}]")["stdout"] == "[unset]\n"
+    env = persistent.session_container.container.attrs["Config"]["Env"]
+    assert not any(e.startswith("DEMO_TOKEN=") for e in env)

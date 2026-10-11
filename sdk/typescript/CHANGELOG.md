@@ -2,6 +2,11 @@
 
 All notable changes to `airlock-sandbox` on npm, the TypeScript SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.4.0 — 2026-10-12
+
+- Secrets: `Sandbox.create({ secrets })`, `sbx.setSecrets()`, `sbx.deleteSecret()` and
+  `sbx.secretNames()`: environment variables for every command, never returned and masked in output.
+
 ## 0.3.0 — 2026-10-11
 
 - Long-running sandboxes: `Sandbox.create({ persistent: true })` keeps one container for the whole

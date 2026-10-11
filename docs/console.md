@@ -45,6 +45,12 @@ commands count toward usage like API calls.
   the console's own origin and carry the page's CSRF token), background processes that keep
   running, and **Preview a web app**: a link to a port the workspace's server listens on.
   Regular workspaces keep the line-by-line terminal.
+- **Secrets** (workspace page): environment variables such as an API key, set with a password
+  field, listed by name only, masked in output and deleted with the workspace.
+- **Learn** (`/console/learn`): hands-on lessons (sandbox basics, a first tool-calling agent, a
+  coding agent that fixes failing tests). Starting one opens a long-running workspace with the
+  lesson's files (from `src/console/lessons/`) and the internet access it needs, as far as the
+  account's egress policy allows, with the steps shown above the terminal.
 - **Cookies** are `__Host-` cookies over https, so preview sites (on subdomains) can't set
   cookies the console would read.
 - **Terminal safety:** commands go through the same exec path as the API (gVisor, limits,
