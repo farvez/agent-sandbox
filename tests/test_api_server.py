@@ -148,6 +148,7 @@ class FakeWorkspace:
 
     def cleanup(self):
         self.cleaned = True
+        self.session_container = None        # like the real one: the container is gone
         self._ws.cleanup()
 
 

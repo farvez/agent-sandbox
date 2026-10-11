@@ -2,6 +2,12 @@
 
 All notable changes to `airlock-sandbox`, the Python SDK for [Airlock](https://github.com/farvez/agent-sandbox).
 
+## 0.8.0 — 2026-10-11
+
+- Agent-framework tools: `airlock_sandbox.integrations.langchain`, `.openai_agents` and `.crewai`,
+  each with `airlock_tools(sandbox, tools=None)`. Extras: `[langchain]`, `[openai-agents]`,
+  `[crewai]`. The SDK itself still has no dependencies.
+
 ## 0.7.0 — 2026-10-11
 
 - Long-running sandboxes: `Sandbox(persistent=True)` keeps one container for the whole session,

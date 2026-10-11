@@ -1,0 +1,78 @@
+name: Airlock sandbox
+description: Run a command (such as your tests) in an isolated Airlock sandbox, with no network unless you allow hosts.
+author: Farvez Anzam
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  api-key:
+    description: Your Airlock API key. Store it as a repository secret, e.g. secrets.AIRLOCK_API_KEY.
+    required: true
+  run:
+    description: The command to run, e.g. "pip install -r requirements.txt && python -m pytest -q". Runs in bash.
+    required: true
+  egress:
+    description: Comma-separated hosts or presets the sandbox may reach over HTTPS, e.g. "pypi" or "pypi,npm". Empty = no network.
+    required: false
+    default: ""
+  upload:
+    description: Upload the checked-out repository (without .git and dependency folders) and run the command in it.
+    required: false
+    default: "true"
+  path:
+    description: Folder to upload (default the repository root).
+    required: false
+    default: "."
+  download:
+    description: Folder (relative to the uploaded repository) to download after the command, e.g. "test-results".
+    required: false
+    default: ""
+  download-to:
+    description: Local folder for the downloaded results.
+    required: false
+    default: airlock-results
+  timeout-minutes:
+    description: Longest the command may run.
+    required: false
+    default: "20"
+  api-url:
+    description: Airlock server URL.
+    required: false
+    default: https://airlock.complyoo.com
+
+outputs:
+  exit-code:
+    description: The command's exit code.
+    value: ${{ steps.airlock.outputs.exit-code }}
+  session-id:
+    description: The sandbox session that ran it (see the console's Activity page).
+    value: ${{ steps.airlock.outputs.session-id }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        update-environment: false
+      id: python
+    - name: Install the Airlock SDK
+      shell: bash
+      run: |
+        "${{ steps.python.outputs.python-path }}" -m venv "$RUNNER_TEMP/airlock-venv"
+        "$RUNNER_TEMP/airlock-venv/bin/python" -m pip install --quiet --disable-pip-version-check "airlock-sandbox>=0.7,<1"
+    - name: Run in the sandbox
+      id: airlock
+      shell: bash
+      env:
+        INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_EGRESS: ${{ inputs.egress }}
+        INPUT_UPLOAD: ${{ inputs.upload }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_DOWNLOAD: ${{ inputs.download }}
+        INPUT_DOWNLOAD_TO: ${{ inputs.download-to }}
+        INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+      run: '"$RUNNER_TEMP/airlock-venv/bin/python" "$GITHUB_ACTION_PATH/run.py"'

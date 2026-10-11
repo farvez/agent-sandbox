@@ -12,7 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []  # standard library only
 authors = [{ name = "Farvez Anzam" }]
-keywords = ["ai", "agents", "sandbox", "code-execution", "gvisor", "llm", "tools", "mcp"]
+keywords = ["ai", "agents", "sandbox", "code-execution", "gvisor", "llm", "tools", "mcp", "langchain", "crewai", "openai-agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,6 +26,10 @@ classifiers = [
 [project.optional-dependencies]
 # MCP server for Claude Code, Claude Desktop and other MCP clients (needs Python 3.10+).
 mcp = ["mcp>=2.3,<3; python_version >= '3.10'"]
+# Agent-framework tools (airlock_sandbox.integrations.*).
+langchain = ["langchain-core>=0.3"]
+openai-agents = ["openai-agents>=0.2"]
+crewai = ["crewai>=0.100; python_version >= '3.10'"]
 
 [project.scripts]
 airlock-sandbox-mcp = "airlock_sandbox.mcp_server:main"

@@ -72,6 +72,47 @@ with Sandbox(snapshot=snap["id"]) as sbx:      # starts with the snapshot's file
 `sbx.restore(id, path=".")` unpacks a snapshot into a running sandbox; `sbx.list_snapshots()` and
 `sbx.delete_snapshot(id)` manage them. Snapshots include installed packages under `/workspace/.local`.
 
+## Agent frameworks
+
+Ready-made tools (`write_file`, `read_file`, `run_command`) for the popular frameworks. Install the
+framework as usual, or with an extra: `pip install "airlock-sandbox[langchain]"`,
+`"[openai-agents]"` or `"[crewai]"`.
+
+```python
+# LangChain / LangGraph
+from langchain.agents import create_agent
+from airlock_sandbox.integrations.langchain import airlock_tools
+
+with Sandbox(egress=["pypi"]) as sbx:
+    agent = create_agent("anthropic:claude-opus-5-5", tools=airlock_tools(sbx))
+    agent.invoke({"messages": [{"role": "user", "content": "Write fizzbuzz.py and run it"}]})
+```
+
+```python
+# OpenAI Agents SDK
+from agents import Agent, Runner
+from airlock_sandbox.integrations.openai_agents import airlock_tools
+
+with Sandbox() as sbx:
+    agent = Agent(name="coder", instructions="Write code and run it.", tools=airlock_tools(sbx))
+    print(Runner.run_sync(agent, "Write fizzbuzz.py and run it").final_output)
+```
+
+```python
+# CrewAI
+from crewai import Agent, Crew, Task
+from airlock_sandbox.integrations.crewai import airlock_tools
+
+with Sandbox() as sbx:
+    coder = Agent(role="Developer", goal="Write working code", backstory="A careful engineer.",
+                  tools=airlock_tools(sbx))
+    task = Task(description="Write fizzbuzz.py and run it", expected_output="Its output", agent=coder)
+    print(Crew(agents=[coder], tasks=[task]).kickoff())
+```
+
+`airlock_tools(sbx, tools=["run_command"])` picks a subset. Tool errors come back to the model as
+text it can act on, and long output is truncated in the middle.
+
 ## Long-running sandboxes and previews
 
 ```python

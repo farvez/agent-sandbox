@@ -55,8 +55,29 @@ console.log((await sbx.run("cd itsdangerous && PYTHONPATH=src python -m pytest -
 claude mcp add --transport http --scope user airlock "https://airlock.complyoo.com/mcp?egress=pypi" --header "X-API-Key: <key>"
 ```
 
+**Agent frameworks** — LangChain / LangGraph, the OpenAI Agents SDK and CrewAI:
+
+```python
+from airlock_sandbox.integrations.langchain import airlock_tools   # or .openai_agents, .crewai
+
+with Sandbox(egress=["pypi"]) as sbx:
+    agent = create_agent("anthropic:claude-opus-5-5", tools=airlock_tools(sbx))
+```
+
+**GitHub Actions** — run your tests (or any command) in an isolated sandbox:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: farvez/agent-sandbox/action@main
+  with:
+    api-key: ${{ secrets.AIRLOCK_API_KEY }}
+    egress: pypi
+    run: pip install -r requirements.txt && python -m pytest -q
+```
+
 More in the [SDK guide](sdk/python/README.md): typed errors and retries, ready-made agent tools
-for OpenAI and Anthropic, the MCP server, and key management.
+for OpenAI and Anthropic, framework integrations, snapshots, long-running sandboxes with preview
+links, the MCP server, and key management.
 
 ## How it works
 
@@ -70,8 +91,9 @@ for OpenAI and Anthropic, the MCP server, and key management.
 ```
 
 Each command starts a fresh container on the session's persistent `/workspace`; processes
-don't survive between commands, files do. Sessions expire after 30 idle minutes and their
-workspace is wiped. Details: [architecture and security model](docs/architecture.md).
+don't survive between commands, files do. **Long-running sessions** keep one container instead,
+so servers keep running, with an interactive terminal and public preview links. Sessions expire
+after 30 idle minutes and their workspace is wiped; snapshots keep a copy for later. Details: [architecture and security model](docs/architecture.md).
 
 ## Documentation
 
@@ -83,13 +105,16 @@ workspace is wiped. Details: [architecture and security model](docs/architecture
 | [REST API](docs/api.md) | Endpoints, API keys, per-tenant limits, server configuration |
 | [Developer console](docs/console.md) | GitHub sign-in, keys, workspaces, repo import, browser terminal |
 | [Deploy to AWS](docs/deploy.md) | Terraform setup, TLS, operations, monitoring and alarms |
+| [GitHub Action](action/README.md) | Run tests or any command in a sandbox from a workflow |
 | [Development](docs/development.md) | Local setup, project layout, demos, evals, tests, releases |
 
 ## Roadmap
 
-- Console: private repositories (GitHub App), a full PTY terminal, free-plan quotas from metering
-- Shared state and a persistent session store for more than one API server
-- JavaScript/TypeScript SDK
+- Learn track: workspace secrets, an LLM-access egress preset, hands-on lessons
+- Free-plan quotas from metering
+- Shared state and a session store for more than one API server; a Lambda MicroVM backend
+  ([spike](docs/spikes/lambda-microvms.md))
+- Previews: live-reload WebSockets
 - Egress: human approval for new hosts, per-tenant bandwidth limits
 
 ## Security

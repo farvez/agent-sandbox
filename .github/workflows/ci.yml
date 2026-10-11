@@ -94,6 +94,28 @@ jobs:
           python -c "import airlock_sandbox, sys; assert 'site-packages' in airlock_sandbox.__file__, airlock_sandbox.__file__"
           pytest -q tests -p no:cacheprovider
 
+  sdk-integrations:
+    name: SDK integrations (LangChain, OpenAI Agents, CrewAI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Against the real frameworks, from the built wheel with its extras.
+      - name: Install the wheel with the framework extras
+        run: |
+          pip install build pytest
+          python -m build --wheel sdk/python
+          pip install "$(ls sdk/python/dist/*.whl)[langchain,openai-agents,crewai]"
+      - name: Run the integration tests (none may skip)
+        working-directory: sdk/python
+        run: |
+          set -o pipefail
+          pytest -q -rs tests/test_integrations.py -p no:cacheprovider 2>&1 | tee out.txt
+          ! grep -q SKIPPED out.txt
+
   terraform:
     name: Terraform (fmt, validate, render)
     runs-on: ubuntu-latest

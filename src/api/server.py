@@ -260,6 +260,9 @@ class SessionRecord:
         self.workspace = workspace
         self.tenant_id = tenant_id
         self.egress = list(egress or [])
+        # Fixed at creation: the workspace forgets its container once cleaned up, and the
+        # long-running-session limit must still be released after that.
+        self.persistent = bool(getattr(workspace, "persistent", False))
         self.created_at = time.time()
         self.last_accessed_at = time.time()
 
@@ -275,7 +278,7 @@ class SessionRecord:
             "last_accessed_at": self.last_accessed_at,
             "expires_at": self.last_accessed_at + SESSION_TTL_SECONDS,
             "disk_quota_mb": self.workspace.quota_bytes // 2**20,
-            "persistent": bool(getattr(self.workspace, "persistent", False)),
+            "persistent": self.persistent,
             "previews": self.previews(),
         }
 
@@ -285,9 +288,6 @@ class SessionRecord:
         return [{"port": port, "url": previews.preview_url(PREVIEW_DOMAIN, port, self.workspace.preview_token)}
                 for port in getattr(self.workspace, "exposed_ports", [])]
 
-    @property
-    def persistent(self) -> bool:
-        return bool(getattr(self.workspace, "persistent", False))
 
 
 active_sessions: Dict[str, SessionRecord] = {}

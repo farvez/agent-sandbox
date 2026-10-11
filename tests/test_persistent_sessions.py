@@ -229,3 +229,16 @@ def test_persistent_state_survives_a_restart(client, preview_domain, tmp_path, m
     rec = server.active_sessions[sid]
     assert rec.persistent and rec.workspace.preview_token == token and rec.workspace.exposed_ports == [3000]
     assert server.LIMITS.usage("acme")["persistent_sessions_open"] == 1
+
+
+def test_limit_is_released_when_sessions_end_or_expire(client, monkeypatch):
+    monkeypatch.setattr(server, "LIMITS", LimitTracker(load_tenant_limits(
+        '{"*": {"max_sessions": 10, "requests_per_minute": 1000, "max_persistent_sessions": 1}}')))
+    for _ in range(3):                                   # delete: the slot comes back every time
+        sid = create_persistent(client)
+        assert client.delete(f"/v1/sessions/{sid}", headers=AUTH).status_code == 200
+    sid = create_persistent(client)                       # expiry releases it too
+    server.active_sessions[sid].last_accessed_at -= server.SESSION_TTL_SECONDS + 1
+    server.reap_expired_sessions()
+    assert server.LIMITS.usage("acme")["persistent_sessions_open"] == 0
+    create_persistent(client)
