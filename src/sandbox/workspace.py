@@ -210,8 +210,11 @@ class SandboxedWorkspace:
             rel = os.path.relpath(target, self.workspace_dir).replace(os.sep, "/")
         name = f".airlock-archive-{uuid.uuid4().hex[:12]}.tar.gz"
         quoted = "'" + rel.replace("'", "'\\''") + "'"
-        # Written straight into the workspace (/tmp is a small tmpfs); excluded from itself.
-        command = f"tar -czf /workspace/{name} --exclude={name} -C /workspace -- {quoted}"
+        # Written straight into the workspace (/tmp is a small tmpfs); excluded from itself. Creating
+        # it changes /workspace while tar reads it, which GNU tar reports with exit code 1 ("file
+        # changed as we read it"); only 2 and above are real failures.
+        command = (f"tar --warning=no-file-changed -czf /workspace/{name} --exclude={name} -C /workspace -- {quoted}; "
+                   f"rc=$?; [ $rc -le 1 ] || exit $rc")
         try:
             result = self.execute(command, timeout_seconds)
             if result["timed_out"] or result["exit_code"] != 0:

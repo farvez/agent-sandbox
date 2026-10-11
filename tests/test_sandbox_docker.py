@@ -120,6 +120,20 @@ def test_archive_and_extract_round_trip(workspace):
     assert leftovers == []
 
 
+def test_archive_of_the_whole_workspace(workspace):
+    # The archive is written into /workspace itself while tar reads it (a snapshot's case).
+    import io
+    import tarfile
+
+    workspace.write_bytes("notes.txt", b"hello")
+    archive = workspace.archive(".", 10 * 2**20)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        names = tar.getnames()
+    assert "./notes.txt" in names and not any(".airlock-" in n for n in names)
+    workspace.extract(archive, "copy")
+    assert workspace.read_bytes("copy/notes.txt", 100) == b"hello"
+
+
 # ---------------------------------------------------------------- egress gateway
 # These reach the real internet (PyPI) through the proxy.
 
