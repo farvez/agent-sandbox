@@ -59,6 +59,15 @@ def test_symlink_inside_workspace_is_refused_too(tmp_path):
         files.read_bytes(str(tmp_path), "link", 100)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX")
+def test_fifos_are_refused_without_blocking(tmp_path):
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(files.WorkspaceFileError):
+        files.read_bytes(str(tmp_path), "pipe", 100)
+    with pytest.raises(files.WorkspaceFileError):
+        files.write_bytes(str(tmp_path), "pipe", b"x")
+
+
 def test_create_new_never_replaces(tmp_path):
     files.create_new(str(tmp_path), "x.tar.gz", b"1")
     with pytest.raises(FileExistsError):

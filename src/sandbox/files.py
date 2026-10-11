@@ -14,6 +14,8 @@ from typing import Optional
 
 O_BINARY = getattr(os, "O_BINARY", 0)
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# A FIFO the sandbox planted would block open(); non-blocking lets the regular-file check refuse it.
+O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 class WorkspaceFileError(Exception):
@@ -33,10 +35,13 @@ def resolve(workspace_dir: str, relative: str) -> str:
     if not relative or "\0" in relative:
         raise WorkspaceFileError("Give a file path inside the workspace.")
     root = os.path.realpath(workspace_dir)
-    candidate = os.path.realpath(os.path.join(root, relative))
-    if not _inside(root, candidate) or candidate == root:
+    literal = os.path.normpath(os.path.join(root, relative))
+    resolved = os.path.realpath(literal)
+    if not _inside(root, literal) or not _inside(root, resolved) or resolved == root:
         raise WorkspaceFileError(f"Access denied: '{relative}' is outside the workspace.", 403)
-    return candidate
+    # The unresolved path, so O_NOFOLLOW applies to its last component: a symlink there is refused
+    # even when it points inside the workspace.
+    return literal
 
 
 def _check_fd(fd: int, root: str, relative: str) -> None:
@@ -52,13 +57,17 @@ def read_bytes(workspace_dir: str, relative: str, max_bytes: int) -> bytes:
     root = os.path.realpath(workspace_dir)
     path = resolve(root, relative)
     try:
-        fd = os.open(path, os.O_RDONLY | O_NOFOLLOW | O_BINARY)
+        fd = os.open(path, os.O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_BINARY)
     except FileNotFoundError:
         raise WorkspaceFileError(f"'{relative}' doesn't exist.", 404)
     except OSError:
         raise WorkspaceFileError(f"'{relative}' can't be read (is it a symlink or a directory?).")
+    try:
+        _check_fd(fd, root, relative)   # before fdopen: on Linux a directory opens fine read-only
+    except Exception:
+        os.close(fd)
+        raise
     with os.fdopen(fd, "rb") as f:
-        _check_fd(f.fileno(), root, relative)
         if os.fstat(f.fileno()).st_size > max_bytes:
             raise WorkspaceFileError(f"'{relative}' is larger than the {max_bytes // 2**20} MB download limit.", 413)
         data = f.read(max_bytes + 1)
@@ -76,11 +85,15 @@ def write_bytes(workspace_dir: str, relative: str, data: bytes, owner: Optional[
     if not _inside(root, os.path.realpath(parent)):
         raise WorkspaceFileError(f"Access denied: '{relative}' is outside the workspace.", 403)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_NOFOLLOW | O_BINARY, 0o644)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_NOFOLLOW | O_NONBLOCK | O_BINARY, 0o644)
     except OSError:
         raise WorkspaceFileError(f"'{relative}' can't be written (is it a symlink or a directory?).")
+    try:
+        _check_fd(fd, root, relative)
+    except Exception:
+        os.close(fd)
+        raise
     with os.fdopen(fd, "wb") as f:
-        _check_fd(f.fileno(), root, relative)
         f.write(data)
     _chown(path, owner)
     return len(data)
